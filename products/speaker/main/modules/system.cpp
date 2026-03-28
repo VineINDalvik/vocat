@@ -646,7 +646,11 @@ static void touch_btn_event_cb(void *button_handle, void *usr_data)
         if (_agent->hasChatState(Agent::ChatState::ChatStateStarted)) {
             if (_agent->isChatState(Agent::ChatState::ChatStateSlept)) {
                 ESP_UTILS_LOGI("Chat Wake up");
+#if CONFIG_SPEAKER_WAKE_WORD_ENABLE
                 audio_gmf_trigger_wakeup();
+#else
+                ESP_UTILS_LOGI("Wake word disabled, ignoring touch wake-up");
+#endif
             } else if (ai_buddy->isSpeaking()) {
                 ESP_UTILS_LOGI("Chat interrupt");
                 coze_chat_response_signal();

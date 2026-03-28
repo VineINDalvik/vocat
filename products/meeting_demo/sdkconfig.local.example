@@ -1,0 +1,19 @@
+# Copy this file to sdkconfig.local and fill in your credentials.
+# sdkconfig.local is gitignored — never commit real credentials.
+#
+# Usage:
+#   cp sdkconfig.local.example sdkconfig.local
+#   # edit sdkconfig.local with your values
+#   rm -rf build sdkconfig && idf.py set-target esp32s3
+#   ./tools/build.sh flash
+
+# WiFi
+CONFIG_MEETING_WIFI_SSID="your_wifi_ssid"
+CONFIG_MEETING_WIFI_PASSWORD="your_wifi_password"
+
+# Volcano Engine RTC credentials
+# From: https://www.volcengine.com/docs/6348/1806624
+CONFIG_MEETING_VOLC_INSTANCE_ID="your_instance_id"
+CONFIG_MEETING_VOLC_BOT_ID="your_bot_id"
+CONFIG_MEETING_VOLC_APP_ID="your_app_id"
+CONFIG_MEETING_VOLC_TOKEN="your_token"

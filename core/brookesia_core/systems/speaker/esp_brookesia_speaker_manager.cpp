@@ -113,12 +113,14 @@ bool Manager::begin(void)
             "Process screen change failed"
         );
     }, LV_EVENT_LONG_PRESSED, this);
+#if CONFIG_SPEAKER_AGENT_AUTOSTART
     _draw_dummy_timer = std::make_unique<LvTimer>([this](void *) {
         ESP_UTILS_CHECK_FALSE_EXIT(
             this->processDisplayScreenChange(Screen::DRAW_DUMMY, nullptr),
             "Process screen change failed"
         );
     }, data.ai_buddy_resume_time_ms, this);
+#endif
 
     // Quick settings
     // Process quick settings event signal

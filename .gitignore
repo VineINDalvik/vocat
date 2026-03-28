@@ -80,3 +80,6 @@ sdkconfig.bmgr_board.old
 
 # private key files
 *.pem
+
+# Private credentials (meeting_demo)
+products/meeting_demo/sdkconfig.local

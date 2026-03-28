@@ -1,0 +1,2 @@
+# ESP32-S3 specific overrides
+CONFIG_IDF_TARGET="esp32s3"

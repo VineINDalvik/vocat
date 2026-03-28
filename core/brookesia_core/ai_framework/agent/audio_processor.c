@@ -275,7 +275,12 @@ esp_err_t audio_recorder_open(recorder_event_callback_t cb, void *ctx)
     audio_recorder.afe_cfg->vad_min_noise_ms = 1000;
     audio_recorder.afe_cfg->agc_init = true;
     audio_recorder.afe_cfg->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
+#if CONFIG_SPEAKER_WAKE_WORD_ENABLE
     audio_recorder.afe_cfg->wakenet_init = true;
+#else
+    audio_recorder.afe_cfg->wakenet_init = false;
+    ESP_LOGI(TAG, "Wake word detection disabled");
+#endif
     audio_recorder.afe_cfg->aec_init = true;
     esp_gmf_afe_manager_cfg_t afe_manager_cfg = DEFAULT_GMF_AFE_MANAGER_CFG(audio_recorder.afe_cfg, NULL, NULL, NULL, NULL);
     afe_manager_cfg.feed_task_setting.prio = DEFAULT_FEED_TASK_PRIO;

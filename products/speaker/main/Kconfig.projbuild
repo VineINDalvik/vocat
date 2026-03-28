@@ -1,5 +1,29 @@
 menu "Example Configuration"
 
+    config SPEAKER_BOOT_VOICE_PROMPTS
+        bool "Enable boot voice prompts (server_connected, mic_open, mic_close)"
+        default n
+        help
+            When enabled, the server_connected, mic_open, and mic_close audio
+            prompts will play during agent lifecycle events.
+            The boot.mp3 will always play regardless of this setting.
+
+    config SPEAKER_AGENT_AUTOSTART
+        bool "Enable voice agent auto-start on boot"
+        default n
+        help
+            When enabled, the Coze agent will automatically initialize and
+            connect to the server on boot.
+            When disabled, the agent must be started manually.
+
+    config SPEAKER_WAKE_WORD_ENABLE
+        bool "Enable wake word detection and touch button wake-up"
+        default n
+        help
+            When enabled, WakeNet detection is active and the touch button
+            can trigger wake-up.
+            When disabled, no wake word detection or touch wake-up.
+
     menuconfig EXAMPLE_COZE_AGENT_ENABLE_DEFAULT_CONFIG
         bool "Default coze agent config"
         default n

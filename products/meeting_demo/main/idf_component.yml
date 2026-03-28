@@ -1,0 +1,7 @@
+## IDF Component Manager Manifest
+dependencies:
+  idf:
+    version: '>=5.0.0'
+  espressif/zlib:
+    version: '>=1.0.0'
+  # Codec components are reused from ../speaker/managed_components via EXTRA_COMPONENT_DIRS

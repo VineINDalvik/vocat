@@ -1,0 +1,17 @@
+menu "Volcano Engine ConvAI Transport"
+
+    choice VOLC_TRANSPORT_MODE
+        prompt "Transport mode"
+        default VOLC_RTC_MODE
+        help
+            Select the transport protocol for the Volcano Engine ConvAI SDK.
+
+        config VOLC_RTC_MODE
+            bool "RTC (high quality, uses libVolcEngineRTCLite.a)"
+
+        config VOLC_WS_MODE
+            bool "WebSocket (low load, pure C)"
+
+    endchoice
+
+endmenu

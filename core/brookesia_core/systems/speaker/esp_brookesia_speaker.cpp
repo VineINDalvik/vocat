@@ -114,6 +114,12 @@ bool Speaker::begin(void)
     ESP_UTILS_CHECK_FALSE_RETURN(ai_buddy->begin(_active_stylesheet.ai_buddy), false, "Failed to begin ai buddy");
     ESP_UTILS_CHECK_FALSE_RETURN(_manager.begin(), false, "Failed to begin manager");
 
+#if !CONFIG_SPEAKER_AGENT_AUTOSTART
+    // When agent autostart is disabled, clear the dummy draw overlay and stay on main screen
+    ESP_UTILS_CHECK_FALSE_RETURN(_display.processDummyDraw(false), false, "Process dummy draw failed");
+    ESP_UTILS_LOGI("Agent autostart disabled, staying on main screen");
+#endif
+
     return true;
 }
 

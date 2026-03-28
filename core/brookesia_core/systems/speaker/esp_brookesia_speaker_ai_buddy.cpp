@@ -222,7 +222,9 @@ bool AI_Buddy::begin(const Data &data)
             break;
         case Agent::ChatEvent::Start:
             stopAudio(AudioType::ServerConnecting);
+#if CONFIG_SPEAKER_BOOT_VOICE_PROMPTS
             sendAudioEvent({AudioType::ServerConnected});
+#endif
             ESP_UTILS_CHECK_FALSE_EXIT(
                 expression.setSystemIcon("server_connected", {.immediate = true}), "Set server connected icon failed"
             );
@@ -241,7 +243,9 @@ bool AI_Buddy::begin(const Data &data)
                 expression.setEmoji("sleepy", {.repeat = false, .keep_when_stop = true}, {.repeat = true}),
                 "Set emoji failed"
             );
+#if CONFIG_SPEAKER_WAKE_WORD_ENABLE
             sendAudioEvent({AudioType::WakeUp});
+#endif
             break;
         case Agent::ChatEvent::WakeUp:
             ESP_UTILS_CHECK_FALSE_EXIT(expression.setEmoji("neutral"), "Set emoji failed");
@@ -379,9 +383,13 @@ bool AI_Buddy::begin(const Data &data)
     }, std::nullopt);
     FunctionDefinitionList::requestInstance().addFunction(terminateChat);
 
+#if CONFIG_SPEAKER_AGENT_AUTOSTART
     ESP_UTILS_CHECK_FALSE_RETURN(
         _agent->sendChatEvent(Agent::ChatEvent::Init), false, "Send chat event init failed"
     );
+#else
+    ESP_UTILS_LOGI("Agent auto-start disabled, agent initialized but not started");
+#endif
 
     del_function.release();
 
@@ -415,7 +423,9 @@ bool AI_Buddy::resume()
 
     if (is_chat_started) {
         stopAudio(AudioType::MicOff);
+#if CONFIG_SPEAKER_BOOT_VOICE_PROMPTS
         sendAudioEvent({AudioType::MicOn});
+#endif
         if (!_agent->hasChatState(Agent::_ChatStateSleep)) {
             ESP_UTILS_CHECK_FALSE_RETURN(
                 _agent->sendChatEvent(Agent::ChatEvent::Sleep), false, "Send chat event sleep failed"
@@ -453,7 +463,9 @@ bool AI_Buddy::pause()
     ESP_UTILS_CHECK_FALSE_RETURN(_agent->pause(), false, "Agent pause failed");
     if (_agent->hasChatState(Agent::ChatStateStarted)) {
         stopAudio(AudioType::MicOn);
+#if CONFIG_SPEAKER_BOOT_VOICE_PROMPTS
         sendAudioEvent({AudioType::MicOff});
+#endif
     }
     if (_agent->hasChatState(Agent::ChatStateInited)) {
         ESP_UTILS_CHECK_ERROR_RETURN(audio_manager_suspend(true), false, "Audio manager suspend failed");

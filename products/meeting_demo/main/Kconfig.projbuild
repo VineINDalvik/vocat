@@ -1,0 +1,39 @@
+menu "Meeting Demo Configuration"
+
+    config MEETING_WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+            WiFi network to connect to on boot.
+
+    config MEETING_WIFI_PASSWORD
+        string "WiFi Password"
+        default "mypassword"
+
+    config MEETING_CLARITYX_SERVER_URL
+        string "ClarityX Server Base URL"
+        default "https://ailabs.mayfair-inc.net/voice-api"
+        help
+            Base URL for the ClarityX meeting session API.
+            createSession = this_value + "/api/session"
+            endSession    = this_value + "/api/session/{id}/end"
+
+    comment "Volcano Engine RTC credentials (required for Host Mode)"
+
+    config MEETING_VOLC_INSTANCE_ID
+        string "Volcano Engine Instance ID"
+        default ""
+
+    config MEETING_VOLC_BOT_ID
+        string "Volcano Engine Bot ID"
+        default ""
+
+    config MEETING_VOLC_APP_ID
+        string "Volcano Engine App ID"
+        default ""
+
+    config MEETING_VOLC_TOKEN
+        string "Volcano Engine Token"
+        default ""
+
+endmenu
