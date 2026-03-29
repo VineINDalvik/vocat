@@ -66,7 +66,6 @@ static esp_err_t do_post(const char *url, const char *body,
         .event_handler         = http_event_handler,
         .user_data             = resp,
         .timeout_ms            = 10000,
-        .connect_timeout_ms    = 5000,
         .skip_cert_common_name_check = true,
         // TLS cert verify is disabled globally via sdkconfig.defaults
         // (CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y)

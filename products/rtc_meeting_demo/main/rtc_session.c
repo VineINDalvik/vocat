@@ -101,7 +101,7 @@ static void audio_feed_task(void *arg) {
 
     // Opus encoder: 16kHz mono 32kbps 20ms frames
     void *enc_hd = NULL;
-    esp_opus_enc_cfg_t enc_cfg = ESP_OPUS_ENC_CONFIG_DEFAULT();
+    esp_opus_enc_config_t enc_cfg = ESP_OPUS_ENC_CONFIG_DEFAULT();
     enc_cfg.sample_rate     = 16000;
     enc_cfg.channel         = 1;   // ESP_AUDIO_MONO = 1
     enc_cfg.bits_per_sample = 16;  // ESP_AUDIO_BIT16 = 16
