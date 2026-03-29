@@ -61,7 +61,7 @@ static const char *TAG = "pipeline_gmf";
 // Holds ~500ms of 25 Opus packets.
 // ---------------------------------------------------------------------------
 #define PLAY_RB_SIZE        (200 * 25)
-#define PLAY_TASK_STACK     (8 * 1024)   // larger stack for opus decode
+#define PLAY_TASK_STACK     (12 * 1024)  // larger stack for opus decode
 #define PLAY_TASK_PRIORITY  (7)
 #define PLAY_TASK_CORE      (0)   // Core 0: separate from audio_feed_task on Core 1
 
@@ -72,6 +72,7 @@ static const char *TAG = "pipeline_gmf";
 // State
 // ---------------------------------------------------------------------------
 static i2c_master_bus_handle_t  s_i2c_bus        = NULL;
+static bool                     s_i2c_owned       = false;
 static i2s_chan_handle_t         s_i2s_tx         = NULL;
 static i2s_chan_handle_t         s_i2s_rx         = NULL;
 static esp_codec_dev_handle_t   s_play_dev        = NULL;
@@ -82,6 +83,7 @@ static bool                     s_play_open       = false;
 static RingbufHandle_t           s_play_rb         = NULL;
 static TaskHandle_t              s_play_task       = NULL;
 static volatile bool             s_play_task_run   = false;
+static SemaphoreHandle_t         s_play_done_sem   = NULL;
 static void                     *s_opus_dec        = NULL;
 
 // ---------------------------------------------------------------------------
@@ -134,8 +136,10 @@ esp_err_t pipeline_gmf_hw_init(void)
             .flags.enable_internal_pullup = true,
         };
         ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_cfg, &s_i2c_bus), TAG, "I2C init failed");
+        s_i2c_owned = true;
         ESP_LOGI(TAG, "I2C created (SDA=%d SCL=%d)", CODEC_I2C_SDA, CODEC_I2C_SCL);
     } else {
+        s_i2c_owned = false;
         ESP_LOGI(TAG, "I2C borrowed from BSP");
     }
 
@@ -289,7 +293,10 @@ esp_err_t pipeline_gmf_hw_deinit(void)
         i2s_del_channel(s_i2s_rx);
         s_i2s_rx = NULL;
     }
-    // I2C bus is owned by BSP — do NOT delete it
+    if (s_i2c_owned && s_i2c_bus) {
+        i2c_del_master_bus(s_i2c_bus);
+        s_i2c_owned = false;
+    }
     s_i2c_bus = NULL;
     s_hw_inited = false;
     return ESP_OK;
@@ -319,21 +326,20 @@ int pipeline_gmf_recorder_read(void *buf, size_t size)
     // in:  32bit stereo frames (same count)
     size_t raw_bytes = (size_t)out_frames * CODEC_CHANNELS * sizeof(int32_t);
 
-    int32_t *raw = heap_caps_malloc(raw_bytes, MALLOC_CAP_DEFAULT);
-    if (!raw) {
-        ESP_LOGE(TAG, "recorder_read: alloc %d bytes failed", (int)raw_bytes);
+    // Static buffer sized for max expected read: 640 samples × 2ch × 4 bytes = 5120 bytes
+    static int32_t s_rec_raw_buf[640 * 2];  // 16kHz 20ms, 32bit stereo
+    if (raw_bytes > sizeof(s_rec_raw_buf)) {
+        ESP_LOGE(TAG, "recorder_read: raw_bytes %d exceeds static buffer %d", (int)raw_bytes, (int)sizeof(s_rec_raw_buf));
         return -1;
     }
 
-    int ret = esp_codec_dev_read(s_rec_dev, raw, (int)raw_bytes);
+    int ret = esp_codec_dev_read(s_rec_dev, s_rec_raw_buf, (int)raw_bytes);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "codec_dev_read error %d", ret);
-        heap_caps_free(raw);
         return -1;
     }
 
-    conv_32s_to_16m(raw, (int16_t *)buf, out_frames);
-    heap_caps_free(raw);
+    conv_32s_to_16m(s_rec_raw_buf, (int16_t *)buf, out_frames);
     return (int)size;
 }
 
@@ -360,8 +366,9 @@ static void player_task(void *arg)
         return;
     }
 
-    // PCM output buffer for Opus decode: 16kHz mono 20ms = 320 samples
-    int16_t pcm_buf[320];
+    // PCM output buffer for Opus decode: max 120ms Opus frame at 16kHz mono = 1920 samples;
+    // use 3840 to match the spec ceiling (16000 * 0.12 * 2 for safety margin)
+    int16_t pcm_buf[3840];  // max 120ms Opus frame at 16kHz mono
 
     while (s_play_task_run) {
         size_t rx_len = 0;
@@ -394,7 +401,7 @@ static void player_task(void *arg)
         vRingbufferReturnItem(s_play_rb, item);
 
         if (dec_ret != ESP_AUDIO_ERR_OK) {
-            ESP_LOGW(TAG, "opus decode error %d, writing silence", dec_ret);
+            ESP_LOGW(TAG, "opus decode error %d (ret=%d), writing silence", dec_ret, (int)dec_ret);
             memset(out_buf, 0, PLAY_OUT_BYTES);
             esp_codec_dev_write(s_play_dev, out_buf, PLAY_OUT_BYTES);
             continue;
@@ -412,6 +419,9 @@ static void player_task(void *arg)
     }
 
     heap_caps_free(out_buf);
+    if (s_play_done_sem) {
+        xSemaphoreGive(s_play_done_sem);
+    }
     vTaskDelete(NULL);
 }
 
@@ -440,6 +450,15 @@ esp_err_t pipeline_gmf_player_open(void)
     // NOSPLIT preserves item boundaries: each send → exact same-size receive
     s_play_rb = xRingbufferCreate(PLAY_RB_SIZE, RINGBUF_TYPE_NOSPLIT);
     if (!s_play_rb) {
+        esp_opus_dec_close(s_opus_dec);
+        s_opus_dec = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_play_done_sem = xSemaphoreCreateBinary();
+    if (!s_play_done_sem) {
+        vRingbufferDelete(s_play_rb);
+        s_play_rb = NULL;
         esp_opus_dec_close(s_opus_dec);
         s_opus_dec = NULL;
         return ESP_ERR_NO_MEM;
@@ -479,7 +498,11 @@ esp_err_t pipeline_gmf_player_close(void)
     if (!s_play_open) return ESP_OK;
 
     s_play_task_run = false;
-    vTaskDelay(pdMS_TO_TICKS(200));   // let task drain and exit
+    if (s_play_done_sem) {
+        xSemaphoreTake(s_play_done_sem, pdMS_TO_TICKS(3000));  // wait up to 3s for task to exit
+        vSemaphoreDelete(s_play_done_sem);
+        s_play_done_sem = NULL;
+    }
     s_play_task = NULL;
 
     if (s_play_rb) {
