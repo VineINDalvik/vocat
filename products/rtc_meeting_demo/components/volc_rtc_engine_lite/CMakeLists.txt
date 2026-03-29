@@ -2,8 +2,9 @@
 # Wraps the prebuilt static library for ESP32-S3
 
 idf_component_register(
+    SRCS ""
     INCLUDE_DIRS "include"
-    REQUIRES mbedtls espressif__zlib json lwip
+    PRIV_REQUIRES mbedtls espressif__zlib json lwip
 )
 
 # Link prebuilt static library for ESP32-S3
