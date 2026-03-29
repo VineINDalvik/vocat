@@ -37,6 +37,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&e->ip_info.ip));
         s_retry_count = 0;
+        // Explicitly set WiFi STA netif as default so RTC SDK can find it
+        esp_netif_set_default_netif(e->esp_netif);
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }

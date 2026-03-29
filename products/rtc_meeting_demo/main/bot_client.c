@@ -133,8 +133,12 @@ esp_err_t bot_client_start_chat(rtc_room_info_t *info)
         return ESP_FAIL;
     }
     cJSON_AddStringToObject(req, "audio_codec", "OPUS");
-    cJSON_AddStringToObject(req, "room_identifier", "OPUSLOW");
+    // no room_identifier → room_id = OPUS{uuid}, use default AIGC policy group
     cJSON_AddBoolToObject(req, "enable_burst", false);
+    cJSON_AddNumberToObject(req, "asr_type", 1);           // bigmodel ASR
+    cJSON_AddBoolToObject(req, "tts_is_bidirection", true); // volcano_bidirection TTS
+    cJSON_AddBoolToObject(req, "enable_conversation_state_callback", true); // LISTENING/THINKING/ANSWERING
+    // tts_is_bidirection: false (default volcano TTS, simpler and works out of box)
     char *body = cJSON_PrintUnformatted(req);
     cJSON_Delete(req);
     if (!body) {

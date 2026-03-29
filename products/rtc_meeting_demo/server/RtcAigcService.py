@@ -175,8 +175,8 @@ class RtcAigcHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             "Mode" : "bigmodel",                                         # 模型类型。取值固定为 bigmodel
             "AppId" : ASR_APP_ID,                                        # ASR App ID
             "AccessToken" : ASR_ACCESS_TOKEN,                            # ASR Access Token
-            "ApiResourceId" : "volc.bigasr.sauc.duration",               # 流式语音识别大模型开通的服务类型：volc.bigasr.sauc.duration：小时版；volc.bigasr.sauc.concurrent：并发版。默认小时版
-            "StreamMode" : 0                                             # 语音识别输出模式: 0：流式输入流式输出; 1：流式输入非流式输出。默认 0
+            "ApiResourceId" : "volc.seedasr.sauc.duration",              # 用户账号开通的服务
+            "StreamMode" : 2                                             # 并发版-流式输入流式输出（匹配用户现有 app 配置）
             # "context" : "{\"hotwords\": [{\"word\": \"CO2\"},{\"word\": \"雨伞\"},{\"word\": \"鱼\"}]}" # 设置热词用于提高识别精度。最多设置200 tokens
         }
         asr_provider_params = volcano_asr_config_provider_params
@@ -249,7 +249,7 @@ class RtcAigcHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 "disable_markdown_filter" : True,                        # 是否关闭 markdown 格式过滤。
                 "enable_language_detector" : False                       # 是否自动识别语种。
             },
-            "ResourceId": "volc.service_type.10029"
+            "ResourceId": "seed-tts-2.0"  # 用户账号开通的 ResourceId
         }
         tts_provider_params = volcano_tts_config
         if "tts_is_bidirection" in json_obj:

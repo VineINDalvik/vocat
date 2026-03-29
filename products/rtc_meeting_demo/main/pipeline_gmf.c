@@ -61,7 +61,7 @@ static const char *TAG = "pipeline_gmf";
 // Holds ~500ms of 25 Opus packets.
 // ---------------------------------------------------------------------------
 #define PLAY_RB_SIZE        (200 * 25)
-#define PLAY_TASK_STACK     (12 * 1024)  // larger stack for opus decode
+#define PLAY_TASK_STACK     (20 * 1024)  // Opus decoder needs large stack
 #define PLAY_TASK_PRIORITY  (7)
 #define PLAY_TASK_CORE      (0)   // Core 0: separate from audio_feed_task on Core 1
 
@@ -96,10 +96,9 @@ static void                     *s_opus_dec        = NULL;
 static void conv_32s_to_16m(const int32_t *src, int16_t *dst, int frames)
 {
     for (int i = 0; i < frames; i++) {
-        // Average left+right for mono mix (avoids dead channel)
-        int32_t l = src[i * 2]     >> 16;
+        // Use right channel only — ESP-VoCat MIC data is on RIGHT channel
         int32_t r = src[i * 2 + 1] >> 16;
-        dst[i] = (int16_t)((l + r) / 2);
+        dst[i] = (int16_t)r;
     }
 }
 
@@ -261,8 +260,8 @@ esp_err_t pipeline_gmf_hw_init(void)
     };
     ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_rec_dev, &rec_info), TAG, "ES7210 open failed");
     // Set microphone input gain — 0dB default is too low; 30dB matches speaker project
-    ESP_RETURN_ON_ERROR(esp_codec_dev_set_in_gain(s_rec_dev, 30.0f), TAG, "ES7210 set gain failed");
-    ESP_LOGI(TAG, "ES7210 (ADC) ready, input gain=30dB");
+    ESP_RETURN_ON_ERROR(esp_codec_dev_set_in_gain(s_rec_dev, 42.0f), TAG, "ES7210 set gain failed");
+    ESP_LOGI(TAG, "ES7210 (ADC) ready, input gain=42dB");
 
     s_hw_inited = true;
     return ESP_OK;
@@ -366,9 +365,15 @@ static void player_task(void *arg)
         return;
     }
 
-    // PCM output buffer for Opus decode: max 120ms Opus frame at 16kHz mono = 1920 samples;
-    // use 3840 to match the spec ceiling (16000 * 0.12 * 2 for safety margin)
-    int16_t pcm_buf[3840];  // max 120ms Opus frame at 16kHz mono
+    // PCM output buffer on heap (7680 bytes — too large for task stack)
+    int16_t *pcm_buf = heap_caps_malloc(3840 * sizeof(int16_t), MALLOC_CAP_DEFAULT);
+    if (!pcm_buf) {
+        ESP_LOGE(TAG, "player_task: pcm_buf alloc failed");
+        heap_caps_free(out_buf);
+        if (s_play_done_sem) xSemaphoreGive(s_play_done_sem);
+        vTaskDelete(NULL);
+        return;
+    }
 
     while (s_play_task_run) {
         size_t rx_len = 0;
@@ -383,7 +388,7 @@ static void player_task(void *arg)
         }
 
         // Decode Opus packet → 16kHz 16bit mono PCM
-        int pcm_bytes = sizeof(pcm_buf);
+        int pcm_bytes = 3840 * (int)sizeof(int16_t);
         esp_audio_dec_in_raw_t in = {
             .buffer   = (uint8_t *)item,
             .len      = (uint32_t)rx_len,
@@ -396,19 +401,21 @@ static void player_task(void *arg)
             .decoded_size = 0,
         };
         esp_audio_dec_info_t dec_info = {0};
-
         esp_audio_err_t dec_ret = esp_opus_dec_decode(s_opus_dec, &in, &out_frame, &dec_info);
         vRingbufferReturnItem(s_play_rb, item);
-
         if (dec_ret != ESP_AUDIO_ERR_OK) {
-            ESP_LOGW(TAG, "opus decode error %d (ret=%d), writing silence", dec_ret, (int)dec_ret);
             memset(out_buf, 0, PLAY_OUT_BYTES);
             esp_codec_dev_write(s_play_dev, out_buf, PLAY_OUT_BYTES);
             continue;
         }
-
-        // Expand 16bit mono → 32bit stereo, then write to I2S
         int frames = (int)(out_frame.decoded_size / sizeof(int16_t));
+        static uint32_t s_play_count = 0;
+        s_play_count++;
+        if (s_play_count <= 5 || s_play_count % 50 == 0) {
+            ESP_LOGI(TAG, "play#%lu: in=%u frames=%d write=%d",
+                     (unsigned long)s_play_count, (unsigned)rx_len, frames,
+                     frames * CODEC_CHANNELS * (int)sizeof(int32_t));
+        }
         conv_16m_to_32s(pcm_buf, out_buf, frames);
         int write_bytes = frames * CODEC_CHANNELS * (int)sizeof(int32_t);
         // Pad remainder with silence if decoded frame is shorter than expected
@@ -418,6 +425,7 @@ static void player_task(void *arg)
         esp_codec_dev_write(s_play_dev, out_buf, PLAY_OUT_BYTES);
     }
 
+    heap_caps_free(pcm_buf);
     heap_caps_free(out_buf);
     if (s_play_done_sem) {
         xSemaphoreGive(s_play_done_sem);
@@ -465,11 +473,12 @@ esp_err_t pipeline_gmf_player_open(void)
     }
 
     s_play_task_run = true;
-    BaseType_t ret  = xTaskCreatePinnedToCore(
+    BaseType_t ret  = xTaskCreatePinnedToCoreWithCaps(
         player_task, "play_task",
         PLAY_TASK_STACK, NULL,
         PLAY_TASK_PRIORITY, &s_play_task,
-        PLAY_TASK_CORE);
+        PLAY_TASK_CORE,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ret != pdPASS) {
         vRingbufferDelete(s_play_rb);
         s_play_rb = NULL;
