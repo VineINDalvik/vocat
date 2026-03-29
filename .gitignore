@@ -83,3 +83,6 @@ sdkconfig.bmgr_board.old
 
 # Private credentials (meeting_demo)
 products/meeting_demo/sdkconfig.local
+
+# Git worktrees
+.worktrees/
