@@ -89,3 +89,6 @@ products/rtc_meeting_demo/sdkconfig.local
 
 # Git worktrees
 .worktrees/
+
+# Private credentials (rtc_meeting_demo server)
+products/rtc_meeting_demo/server/RtcAigcConfig.py
