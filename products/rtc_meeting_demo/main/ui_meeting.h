@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2025 Mayfair Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// ui_meeting — 360×360 round-screen LVGL UI for meeting_demo.
+// ui_meeting — 360×360 round-screen LVGL UI for rtc_meeting_demo.
 //
 // Three states driven by button callbacks; state changes call into
-// volc_rtc_session_start/stop and update status text from the session
+// rtc_session_start/stop and update status text from the session
 // state callback.
 
 #pragma once
@@ -17,7 +17,7 @@ extern "C" {
 typedef enum {
     UI_STATE_IDLE,     // Initial: "Meeting Assistant" + [Start Meeting]
     UI_STATE_MEETING,  // Active:  "Meeting in Progress" + [Host Mode][Stop Meeting]
-    UI_STATE_HOST,     // Host:    "Host Mode - Clary" + [Exit Host Mode]
+    UI_STATE_HOST,     // Host:    "Host Mode - RTC AI" + [Exit Host Mode]
 } ui_state_t;
 
 /**
