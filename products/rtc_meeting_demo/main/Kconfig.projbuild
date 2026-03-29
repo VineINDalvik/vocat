@@ -1,0 +1,31 @@
+menu "RTC Meeting Demo Configuration"
+
+    config MEETING_WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+            WiFi network to connect to on boot.
+
+    config MEETING_WIFI_PASSWORD
+        string "WiFi Password"
+        default "mypassword"
+
+    comment "Business server (Python RtcAigcService)"
+
+    config AIGENT_SERVER_HOST
+        string "Business Server Host (ip:port)"
+        default "192.168.1.100:8080"
+        help
+            Host and port of the Python business server (no http:// prefix).
+            Example: 192.168.1.100:8080
+
+    comment "Volcengine RTC credentials"
+
+    config RTC_APPID
+        string "Volcengine RTC App ID"
+        default ""
+        help
+            App ID for VolcEngineRTCLite SDK (from Volcengine RTC console).
+            Also used to build the Authorization header: af78e30 + this value.
+
+endmenu
