@@ -12,6 +12,7 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/sdkconfig.local")
 else()
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
 endif()
+# Copy sdkconfig.local.example to sdkconfig.local and fill in your credentials.
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(rtc_meeting_demo)

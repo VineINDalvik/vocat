@@ -1,4 +1,4 @@
-# ESP-IDF Partition Table — meeting_demo
+# ESP-IDF Partition Table — rtc_meeting_demo
 # No spiffs/model/animation partitions; app-only dev layout.
 # Name,   Type, SubType, Offset,   Size,    Flags
 nvs,      data, nvs,     ,         0x4000,
