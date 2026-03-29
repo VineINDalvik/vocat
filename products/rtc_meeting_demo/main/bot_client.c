@@ -30,6 +30,9 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     http_resp_t *resp = (http_resp_t *)evt->user_data;
 
     switch (evt->event_id) {
+    case HTTP_EVENT_ON_CONNECTED:
+        resp->data_len = 0;
+        break;
     case HTTP_EVENT_ON_DATA:
         if (resp && evt->data_len > 0) {
             int remaining = resp->buf_size - resp->data_len - 1; // -1 for NUL
@@ -109,12 +112,20 @@ esp_err_t bot_client_start_chat(rtc_room_info_t *info)
     memset(info, 0, sizeof(*info));
 
     // Build Authorization header: "af78e30" + APPID
-    char auth[64];
-    snprintf(auth, sizeof(auth), "af78e30%s", CONFIG_RTC_APPID);
+    char auth[80];
+    int ret = snprintf(auth, sizeof(auth), "af78e30%s", CONFIG_RTC_APPID);
+    if (ret >= (int)sizeof(auth)) {
+        ESP_LOGE(TAG, "auth buffer overflow");
+        return ESP_FAIL;
+    }
 
     // Build URL
     char url[128];
-    snprintf(url, sizeof(url), "http://%s/startvoicechat", CONFIG_AIGENT_SERVER_HOST);
+    ret = snprintf(url, sizeof(url), "http://%s/startvoicechat", CONFIG_AIGENT_SERVER_HOST);
+    if (ret >= (int)sizeof(url)) {
+        ESP_LOGE(TAG, "url buffer overflow");
+        return ESP_FAIL;
+    }
 
     // Build request body
     cJSON *req = cJSON_CreateObject();
@@ -211,12 +222,20 @@ esp_err_t bot_client_stop_chat(const rtc_room_info_t *info)
     }
 
     // Build Authorization header
-    char auth[64];
-    snprintf(auth, sizeof(auth), "af78e30%s", CONFIG_RTC_APPID);
+    char auth[80];
+    int ret = snprintf(auth, sizeof(auth), "af78e30%s", CONFIG_RTC_APPID);
+    if (ret >= (int)sizeof(auth)) {
+        ESP_LOGE(TAG, "auth buffer overflow");
+        return ESP_FAIL;
+    }
 
     // Build URL
     char url[128];
-    snprintf(url, sizeof(url), "http://%s/stopvoicechat", CONFIG_AIGENT_SERVER_HOST);
+    ret = snprintf(url, sizeof(url), "http://%s/stopvoicechat", CONFIG_AIGENT_SERVER_HOST);
+    if (ret >= (int)sizeof(url)) {
+        ESP_LOGE(TAG, "url buffer overflow");
+        return ESP_FAIL;
+    }
 
     // Build request body: app_id + room_id + task_id
     cJSON *req = cJSON_CreateObject();
