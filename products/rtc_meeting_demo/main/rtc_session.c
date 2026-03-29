@@ -170,6 +170,21 @@ static void audio_feed_task(void *arg) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Engine destroy task (dispatched to avoid blocking the SDK callback thread)  */
+/* -------------------------------------------------------------------------- */
+
+static void engine_destroy_task(void *arg) {
+    byte_rtc_engine_t engine = (byte_rtc_engine_t)arg;
+    byte_rtc_fini(engine);
+    // Wait for fini_notify via a polling loop (safe on a separate task)
+    for (int i = 0; i < 50 && !s_sess.fini_done; i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    byte_rtc_destroy(engine);
+    vTaskDelete(NULL);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Public API                                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -192,10 +207,31 @@ esp_err_t rtc_session_start(rtc_session_state_cb_t cb, void *ctx) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 
-    // Init audio hardware
-    ESP_RETURN_ON_ERROR(pipeline_gmf_hw_init(),       TAG, "hw_init failed");
-    ESP_RETURN_ON_ERROR(pipeline_gmf_recorder_open(), TAG, "recorder_open failed");
-    ESP_RETURN_ON_ERROR(pipeline_gmf_player_open(),   TAG, "player_open failed");
+    // Warn if WiFi is still not connected after waiting
+    {
+        esp_netif_t *check_netif = esp_netif_get_default_netif();
+        esp_netif_ip_info_t check_ip;
+        if (!check_netif || esp_netif_get_ip_info(check_netif, &check_ip) != ESP_OK || check_ip.ip.addr == 0) {
+            ESP_LOGW(TAG, "WiFi not connected after 5s, proceeding anyway");
+        }
+    }
+
+    // Init audio hardware — use explicit checks so we can clean up on failure
+    if (pipeline_gmf_hw_init() != ESP_OK) {
+        ESP_LOGE(TAG, "hw_init failed");
+        goto fail_clean;
+    }
+    if (pipeline_gmf_recorder_open() != ESP_OK) {
+        ESP_LOGE(TAG, "recorder_open failed");
+        pipeline_gmf_hw_deinit();
+        goto fail_clean;
+    }
+    if (pipeline_gmf_player_open() != ESP_OK) {
+        ESP_LOGE(TAG, "player_open failed");
+        pipeline_gmf_recorder_close();
+        pipeline_gmf_hw_deinit();
+        goto fail_clean;
+    }
 
     set_state(RTC_SESSION_CONNECTING);
 
@@ -227,7 +263,11 @@ esp_err_t rtc_session_start(rtc_session_state_cb_t cb, void *ctx) {
     }
 
     byte_rtc_set_log_level(s_sess.engine, BYTE_RTC_LOG_LEVEL_ERROR);
-    byte_rtc_init(s_sess.engine);
+    int init_ret = byte_rtc_init(s_sess.engine);
+    if (init_ret != 0) {
+        ESP_LOGE(TAG, "byte_rtc_init failed: %d", init_ret);
+        goto fail_after_engine;
+    }
     byte_rtc_set_audio_codec(s_sess.engine, AUDIO_CODEC_TYPE_OPUS);
 
     // Join room
@@ -263,17 +303,25 @@ esp_err_t rtc_session_start(rtc_session_state_cb_t cb, void *ctx) {
     return ESP_OK;
 
 fail_after_engine:
-    byte_rtc_fini(s_sess.engine);
-    // Wait for fini_notify
-    for (int i = 0; i < 30 && !s_sess.fini_done; i++) vTaskDelay(pdMS_TO_TICKS(100));
-    byte_rtc_destroy(s_sess.engine);
-    s_sess.engine = NULL;
+    {
+        byte_rtc_engine_t engine_to_destroy = s_sess.engine;
+        s_sess.engine = NULL;
+        // Dispatch fini+destroy to a task so we don't block the SDK callback thread
+        xTaskCreate(engine_destroy_task, "rtc_destroy", 4096, engine_to_destroy, 5, NULL);
+        // Give the destroy task a moment to start before we clean up pipeline
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
 
 fail_after_http:
     bot_client_stop_chat(&s_sess.room_info);
     pipeline_gmf_recorder_close();
     pipeline_gmf_player_close();
     pipeline_gmf_hw_deinit();
+    s_sess.starting = false;
+    set_state(RTC_SESSION_ERROR);
+    return ESP_FAIL;
+
+fail_clean:
     s_sess.starting = false;
     set_state(RTC_SESSION_ERROR);
     return ESP_FAIL;
@@ -297,11 +345,12 @@ esp_err_t rtc_session_stop(void) {
     if (s_sess.engine) {
         byte_rtc_leave_room(s_sess.engine, s_sess.room_info.room_id);
         vTaskDelay(pdMS_TO_TICKS(500));
-        byte_rtc_fini(s_sess.engine);
-        // Wait for fini_notify
-        for (int i = 0; i < 30 && !s_sess.fini_done; i++) vTaskDelay(pdMS_TO_TICKS(100));
-        byte_rtc_destroy(s_sess.engine);
+        byte_rtc_engine_t engine_to_destroy = s_sess.engine;
         s_sess.engine = NULL;
+        // Dispatch fini+destroy to a task so we don't block the SDK callback thread
+        xTaskCreate(engine_destroy_task, "rtc_destroy", 4096, engine_to_destroy, 5, NULL);
+        // Give the destroy task a moment to start before we clean up pipeline
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 
     // Stop AI agent
