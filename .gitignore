@@ -84,5 +84,11 @@ sdkconfig.bmgr_board.old
 # Private credentials (meeting_demo)
 products/meeting_demo/sdkconfig.local
 
+# Private credentials (rtc_meeting_demo)
+products/rtc_meeting_demo/sdkconfig.local
+
 # Git worktrees
 .worktrees/
+
+# Private credentials (rtc_meeting_demo server)
+products/rtc_meeting_demo/server/RtcAigcConfig.py
