@@ -7,6 +7,7 @@ import socketserver
 import json
 import uuid
 import time
+import datetime
 
 import AccessToken
 import RtcApiRequester
@@ -81,6 +82,9 @@ class RtcAigcHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
     '''
 
+    def timestamp(self):
+        return datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
     def do_POST(self):
         json_obj = self.parse_post_data()
         if json_obj == None:
@@ -92,14 +96,25 @@ class RtcAigcHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.stop_voice_chat(json_obj)
         elif self.path == "/updatevoicechat":
             self.update_voice_chat(json_obj)
+        elif self.path == "/callback":
+            self.handle_callback(json_obj)
         else:
             self.response_data(404, "path error, unknown path: " + self.path)
             return
 
 ###################################### start voice chat ######################################
     def start_voice_chat(self, json_obj):
+        req_start_time = time.time()
+        print(f"[{self.timestamp()}] === START VOICE CHAT REQUEST ===")
+        print(f"[{self.timestamp()}] Request params: asr_type={json_obj.get('asr_type', 'default')}, vad_silence_time={json_obj.get('vad_silence_time', 600)}, llm_prefill={json_obj.get('llm_prefill', False)}")
+
         room_info = self.generate_rtc_room_info(json_obj)
         ret = self.request_start_voice_chat(room_info, json_obj)
+
+        req_end_time = time.time()
+        latency_ms = int((req_end_time - req_start_time) * 1000)
+        print(f"[{self.timestamp()}] === END VOICE CHAT REQUEST (total: {latency_ms}ms) ===")
+
         if ret == None:
             resp_obj = {
                 "data" : room_info
@@ -413,8 +428,16 @@ class RtcAigcHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
         request_body_str = json.dumps(request_body)
         canonical_query_string = "Action=%s&Version=%s" % (RTC_API_START_VOICE_CHAT_ACTION, RTC_API_VERSION)
+
+        api_start_time = time.time()
+        print(f"[{self.timestamp()}] Calling Volcengine StartVoiceChat API...")
+        print(f"[{self.timestamp()}] Config: ASR={asr_provider_params.get('Mode', 'unknown')}, VAD={vad_silence_time}ms, LLM_Prefill={llm_prefill}")
+
         code, response = RtcApiRequester.request_rtc_api(RTC_API_HOST, "POST", "/", canonical_query_string, None, request_body_str, AK, SK)
-        print("request_rtc_api start code:", code)
+
+        api_end_time = time.time()
+        api_latency_ms = int((api_end_time - api_start_time) * 1000)
+        print(f"[{self.timestamp()}] Volcengine API response: code={code}, latency={api_latency_ms}ms")
         print("request_rtc_api start response:", response)
         if code == RESPONSE_CODE_SUCCESS:
             if "Result" in response and response["Result"] == "ok":
@@ -428,7 +451,32 @@ class RtcAigcHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 return "request rtc api response code " + str(code)
         return None
 
-###################################### stop voice chat #######################################
+###################################### callback handler ######################################
+    def handle_callback(self, json_obj):
+        """Handle conversation state callback from Volcengine RTC"""
+        # Log timestamp and full callback data for latency analysis
+        print(f"[{self.timestamp()}] === CALLBACK ===")
+        print(f"[{self.timestamp()}] Callback data: {json.dumps(json_obj, ensure_ascii=False)}")
+
+        # Extract key latency-related fields
+        if "Stage" in json_obj:
+            stage = json_obj["Stage"]
+            code = stage.get("Code", -1)
+            desc = stage.get("Description", "")
+            print(f"[{self.timestamp()}] CONV Stage: code={code}, desc={desc}")
+
+        # Subtitle/ASR callback
+        if "data" in json_obj:
+            data = json_obj.get("data", [])
+            if data and len(data) > 0:
+                item = data[0]
+                text = item.get("text", "")
+                user_id = item.get("userId", "")
+                definite = item.get("definite", False)
+                print(f"[{self.timestamp()}] ASR: user={user_id}, definite={definite}, text={text[:50]}...")
+
+        # Always return success
+        self.response_data(RESPONSE_CODE_SUCCESS, "callback received")
     def stop_voice_chat(self, json_obj):
         # 参考 https://www.volcengine.com/docs/6348/1404672
         if "room_id" not in json_obj or "task_id" not in json_obj or "app_id" not in json_obj:

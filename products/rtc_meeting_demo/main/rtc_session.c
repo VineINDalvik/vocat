@@ -140,13 +140,15 @@ static void on_message_received(byte_rtc_engine_t engine, const char *room, cons
                 cJSON *err_code = stage ? cJSON_GetObjectItem(stage, "ErrorCode") : NULL;
                 cJSON *err_msg  = stage ? cJSON_GetObjectItem(stage, "ErrorMessage") : NULL;
                 int c = code ? (int)cJSON_GetNumberValue(code) : -1;
+                // Get timestamp for latency analysis
+                int64_t now_ms = esp_timer_get_time() / 1000;
                 if (err_msg && cJSON_GetStringValue(err_msg)) {
-                    ESP_LOGE(TAG, "CONV code=%d desc=%s ErrCode=%d ErrMsg=%s", c,
+                    ESP_LOGE(TAG, "CONV [%lldms] code=%d desc=%s ErrCode=%d ErrMsg=%s", now_ms, c,
                              desc ? cJSON_GetStringValue(desc) : "",
                              err_code ? (int)cJSON_GetNumberValue(err_code) : -1,
                              cJSON_GetStringValue(err_msg));
                 } else {
-                    ESP_LOGI(TAG, "CONV stage code=%d: %s", c,
+                    ESP_LOGI(TAG, "CONV [%lldms] stage code=%d: %s", now_ms, c,
                              desc ? cJSON_GetStringValue(desc) : "");
                 }
                 // Print full JSON for code=0 errors
