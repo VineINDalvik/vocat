@@ -19,7 +19,7 @@
 
 static const char *TAG = "mp3_player";
 
-#define QUEUE_DEPTH  8
+#define QUEUE_DEPTH  32
 
 typedef struct {
     uint8_t *data;
@@ -31,6 +31,8 @@ static TaskHandle_t      s_task     = NULL;
 static volatile bool     s_task_run = false;
 static volatile bool     s_busy     = false;
 static SemaphoreHandle_t s_done_sem = NULL;
+
+#define DECODE_BUF_SIZE (16 * 1024)
 
 // Resample 24kHz mono → 16kHz mono (ratio 2/3 via linear interpolation)
 static int resample_24k_to_16k(const int16_t *in, int in_n, int16_t *out)
@@ -61,26 +63,46 @@ static void mp3_play_task(void *arg)
     int16_t *pcm_resampled = heap_caps_malloc(
         MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *decode_buf = heap_caps_malloc(
+        DECODE_BUF_SIZE,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
-    if (!pcm_raw || !pcm_resampled) {
-        ESP_LOGE(TAG, "PCM buffer alloc failed");
-        if (pcm_raw)       heap_caps_free(pcm_raw);
-        if (pcm_resampled) heap_caps_free(pcm_resampled);
+    if (!pcm_raw || !pcm_resampled || !decode_buf) {
+        ESP_LOGE(TAG, "buffer alloc failed");
+        heap_caps_free(pcm_raw);
+        heap_caps_free(pcm_resampled);
+        heap_caps_free(decode_buf);
         vTaskDelete(NULL);
         return;
     }
 
     uint32_t chunk_count = 0;
+    bool     prev_had_audio = false;
+    size_t   decode_buf_len = 0; // unconsumed bytes carried across chunks
 
     while (s_task_run) {
         mp3_chunk_t chunk;
         if (xQueueReceive(s_queue, &chunk, pdMS_TO_TICKS(100)) != pdTRUE) continue;
 
+        /* ── Sentinel: server sent "done" — all audio has been delivered ── */
+        if (chunk.data == NULL) {
+            ESP_LOGI(TAG, "[OK] done sentinel — waiting for ring buffer drain");
+            for (int i = 0; i < 100; i++) {
+                if (pipeline_ws_player_is_drained()) break;
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+            s_busy = false;
+            g_mic_muted = false;
+            ESP_LOGI(TAG, "mic UNMUTED (done + drained)");
+            if (s_done_sem) xSemaphoreGive(s_done_sem);
+            chunk_count = 0;
+            prev_had_audio = false;
+            decode_buf_len = 0;
+            continue;
+        }
+
         chunk_count++;
         int64_t recv_ts = esp_timer_get_time() / 1000;
-        ESP_LOGI(TAG, "[OK] playing chunk #%lu len=%u",
-                 (unsigned long)chunk_count, (unsigned)chunk.len);
-        ESP_LOGI(TAG, "[LATENCY] answer_audio_recv ts=%lldms", (long long)recv_ts);
 
         if (!s_busy) {
             s_busy       = true;
@@ -88,28 +110,68 @@ static void mp3_play_task(void *arg)
             ESP_LOGI(TAG, "mic MUTED (playback started)");
         }
 
-        // Decode all MP3 frames in this chunk
-        int      offset      = 0;
-        uint32_t mp3_frames  = 0;
-        uint32_t pcm_total   = 0;
-        bool     first_frame = true;
+        /* Detect sentence boundary by ID3v2 tag */
+        bool is_new_sentence = (chunk.len >= 3 &&
+            chunk.data[0] == 'I' && chunk.data[1] == 'D' && chunk.data[2] == '3');
 
-        while (offset < (int)chunk.len) {
+        if (is_new_sentence) {
+            mp3dec_init(&mp3d);
+            decode_buf_len = 0; // discard leftover from previous sentence
+
+            if (prev_had_audio) {
+                static const int16_t silence[1600] = {0};
+                pipeline_ws_player_write_pcm((int16_t *)silence, 1600);
+                pipeline_ws_player_write_pcm((int16_t *)silence, 1600);
+            }
+        }
+
+        /* Skip ID3v2 header if present */
+        size_t data_start = 0;
+        if (is_new_sentence && chunk.len >= 10) {
+            uint32_t id3_body =
+                ((uint32_t)(chunk.data[6] & 0x7F) << 21) |
+                ((uint32_t)(chunk.data[7] & 0x7F) << 14) |
+                ((uint32_t)(chunk.data[8] & 0x7F) <<  7) |
+                 (uint32_t)(chunk.data[9] & 0x7F);
+            uint32_t id3_total = 10 + id3_body;
+            data_start = (id3_total <= (uint32_t)chunk.len) ? id3_total : chunk.len;
+        }
+
+        /* Append chunk data to decode buffer (which may hold leftover from prev chunk) */
+        size_t data_to_copy = chunk.len - data_start;
+        if (decode_buf_len + data_to_copy > DECODE_BUF_SIZE) {
+            ESP_LOGW(TAG, "decode buf overflow, discarding leftover");
+            decode_buf_len = 0;
+        }
+        memcpy(decode_buf + decode_buf_len, chunk.data + data_start, data_to_copy);
+        decode_buf_len += data_to_copy;
+        free(chunk.data);
+
+        /* Decode all complete MP3 frames from the combined buffer */
+        uint32_t mp3_frames = 0, pcm_total = 0;
+        int offset = 0;
+        int64_t decode_start_ts = esp_timer_get_time() / 1000;
+        bool first_frame = true;
+
+        while (offset < (int)decode_buf_len) {
             mp3dec_frame_info_t info;
             int samples = mp3dec_decode_frame(
                 &mp3d,
-                chunk.data + offset,
-                (int)chunk.len - offset,
+                decode_buf + offset,
+                (int)decode_buf_len - offset,
                 pcm_raw, &info);
-            if (info.frame_bytes <= 0) break;  // truly no progress — end of decodable data
+            if (info.frame_bytes <= 0) break;
             offset += info.frame_bytes;
-            if (samples <= 0) continue;        // skipped preamble/junk, keep scanning
+            if (samples <= 0) continue;
             mp3_frames++;
 
             if (first_frame) {
                 int64_t play_ts = esp_timer_get_time() / 1000;
-                ESP_LOGI(TAG, "[LATENCY] playback_start ts=%lldms delta=%lldms",
-                         (long long)play_ts, (long long)(play_ts - recv_ts));
+                ESP_LOGI(TAG, "[LATENCY] chunk #%lu playback_start ts=%lldms"
+                         " recv_to_play=%lldms",
+                         (unsigned long)chunk_count,
+                         (long long)play_ts,
+                         (long long)(play_ts - recv_ts));
                 first_frame = false;
             }
 
@@ -124,25 +186,27 @@ static void mp3_play_task(void *arg)
             pcm_total += (uint32_t)out_frames;
         }
 
-        ESP_LOGI(TAG, "chunk #%lu decoded: %lu mp3 frames -> %lu pcm frames (resampled)",
+        /* Keep unconsumed bytes for next chunk (cross-boundary MP3 frame) */
+        size_t leftover = decode_buf_len - (size_t)offset;
+        if (leftover > 0 && offset > 0) {
+            memmove(decode_buf, decode_buf + offset, leftover);
+        }
+        decode_buf_len = leftover;
+
+        int64_t decode_end_ts = esp_timer_get_time() / 1000;
+        ESP_LOGI(TAG, "[CHUNK] #%lu decoded: %lu frames %lu pcm %lldms leftover=%u",
                  (unsigned long)chunk_count,
                  (unsigned long)mp3_frames,
-                 (unsigned long)pcm_total);
-        free(chunk.data);
+                 (unsigned long)pcm_total,
+                 (long long)(decode_end_ts - decode_start_ts),
+                 (unsigned)leftover);
 
-        // After draining queue, unmute after 300ms
-        if (uxQueueMessagesWaiting(s_queue) == 0) {
-            s_busy = false;
-            ESP_LOGI(TAG, "[OK] all chunks played, queue empty");
-            vTaskDelay(pdMS_TO_TICKS(300));
-            g_mic_muted = false;
-            ESP_LOGI(TAG, "mic UNMUTED (300ms after last chunk)");
-            if (s_done_sem) xSemaphoreGive(s_done_sem);
-        }
+        if (pcm_total > 0) prev_had_audio = true;
     }
 
     heap_caps_free(pcm_raw);
     heap_caps_free(pcm_resampled);
+    heap_caps_free(decode_buf);
     ESP_LOGI(TAG, "[OK] task stopped, heap_free=%lu", esp_get_free_heap_size());
     s_task = NULL;
     vTaskDelete(NULL);
@@ -181,12 +245,19 @@ esp_err_t mp3_player_enqueue(const uint8_t *mp3, size_t len)
     if (!chunk.data) return ESP_ERR_NO_MEM;
     memcpy(chunk.data, mp3, len);
     chunk.len = len;
-    if (xQueueSend(s_queue, &chunk, 0) != pdTRUE) {
+    if (xQueueSend(s_queue, &chunk, pdMS_TO_TICKS(500)) != pdTRUE) {
         free(chunk.data);
-        ESP_LOGW(TAG, "queue full, dropping chunk len=%u", (unsigned)len);
+        ESP_LOGW(TAG, "queue full after 500ms, dropping chunk len=%u", (unsigned)len);
         return ESP_ERR_TIMEOUT;
     }
     return ESP_OK;
+}
+
+void mp3_player_signal_done(void)
+{
+    if (!s_queue) return;
+    mp3_chunk_t sentinel = { .data = NULL, .len = 0 };
+    xQueueSend(s_queue, &sentinel, pdMS_TO_TICKS(500));
 }
 
 esp_err_t mp3_player_flush_and_wait(void)
@@ -213,3 +284,8 @@ esp_err_t mp3_player_close(void)
 }
 
 bool mp3_player_is_busy(void) { return s_busy; }
+
+bool mp3_player_pending(void)
+{
+    return s_busy || (s_queue && uxQueueMessagesWaiting(s_queue) > 0);
+}

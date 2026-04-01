@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "\"/Users/pdan/.bun/bin/bun\" \"/Users/pdan/.claude/plugins/marketplaces/thedotmack/plugin/scripts/worker-service.cjs\" hook cursor session-init"
+      },
+      {
+        "command": "\"/Users/pdan/.bun/bin/bun\" \"/Users/pdan/.claude/plugins/marketplaces/thedotmack/plugin/scripts/worker-service.cjs\" hook cursor context"
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "\"/Users/pdan/.bun/bin/bun\" \"/Users/pdan/.claude/plugins/marketplaces/thedotmack/plugin/scripts/worker-service.cjs\" hook cursor observation"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "\"/Users/pdan/.bun/bin/bun\" \"/Users/pdan/.claude/plugins/marketplaces/thedotmack/plugin/scripts/worker-service.cjs\" hook cursor observation"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "\"/Users/pdan/.bun/bin/bun\" \"/Users/pdan/.claude/plugins/marketplaces/thedotmack/plugin/scripts/worker-service.cjs\" hook cursor file-edit"
+      }
+    ],
+    "stop": [
+      {
+        "command": "\"/Users/pdan/.bun/bin/bun\" \"/Users/pdan/.claude/plugins/marketplaces/thedotmack/plugin/scripts/worker-service.cjs\" hook cursor summarize"
+      }
+    ]
+  }
+}

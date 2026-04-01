@@ -1,0 +1,9 @@
+# WiFi credentials
+CONFIG_MEETING_WIFI_SSID="Mayfair-Test-SG"
+CONFIG_MEETING_WIFI_PASSWORD="Mayfair2025"
+
+# Business server (ip:port, no scheme, e.g. 192.168.1.100:8080)
+CONFIG_AIGENT_SERVER_HOST="192.168.98.102:8080"
+
+# Volcengine RTC App ID (used in Authorization header)
+CONFIG_RTC_APPID="68c4d5186ce6910176fb1228"

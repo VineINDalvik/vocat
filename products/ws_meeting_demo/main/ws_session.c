@@ -36,6 +36,7 @@ static QueueHandle_t      s_cmd_queue = NULL;
 static ws_session_state_t s_state     = WS_SESSION_IDLE;
 static char               s_session_id[64] = {0};
 static uint32_t           s_answer_chunk_count = 0;
+static bool               s_first_answer_text_logged = false;
 
 // ---------------------------------------------------------------------------
 // State transitions
@@ -79,10 +80,8 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
     if (strcmp(type, "transcription") == 0) {
         cJSON *text = cJSON_GetObjectItemCaseSensitive(root, "text");
         if (cJSON_IsString(text) && text->valuestring) {
-            char buf[256];
-            snprintf(buf, sizeof(buf), "Q: %s", text->valuestring);
-            ws_session_update_ui_status(buf);
-            ESP_LOGI(TAG, "recv transcription: %s", text->valuestring);
+            ESP_LOGI(TAG, "[LATENCY] transcription_recv ts=%lldms text=\"%.60s\"",
+                     (long long)(esp_timer_get_time() / 1000), text->valuestring);
         }
 
     } else if (strcmp(type, "answer_text") == 0) {
@@ -90,9 +89,15 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
         cJSON *text_j = cJSON_GetObjectItemCaseSensitive(root, "text");
         bool done = cJSON_IsTrue(done_j);
         int tlen = cJSON_IsString(text_j) ? (int)strlen(text_j->valuestring) : 0;
-        ESP_LOGI(TAG, "recv answer_text (done=%s) len=%d",
-                 done ? "true" : "false", tlen);
-        // answer_text is not shown on UI in host mode
+        if (!s_first_answer_text_logged && tlen > 0) {
+            ESP_LOGI(TAG, "[LATENCY] first_answer_text_recv ts=%lldms",
+                     (long long)(esp_timer_get_time() / 1000));
+            s_first_answer_text_logged = true;
+        }
+        if (done) {
+            ESP_LOGI(TAG, "[LATENCY] answer_text_done ts=%lldms",
+                     (long long)(esp_timer_get_time() / 1000));
+        }
 
     } else if (strcmp(type, "answer_audio") == 0) {
         cJSON *data_j = cJSON_GetObjectItemCaseSensitive(root, "data");
@@ -108,13 +113,13 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
                     (const unsigned char *)b64, b64_n);
                 if (rc == 0 && out_len > 0) {
                     s_answer_chunk_count++;
-                    ESP_LOGI(TAG, "recv answer_audio chunk #%lu len=%u",
-                             (unsigned long)s_answer_chunk_count, (unsigned)out_len);
-                    if (s_answer_chunk_count == 1) {
-                        ESP_LOGI(TAG, "[LATENCY] first_answer_audio_recv ts=%lldms",
-                                 (long long)(esp_timer_get_time() / 1000));
-                    }
+                    int64_t now_ms = esp_timer_get_time() / 1000;
+                    ESP_LOGI(TAG, "[LATENCY] answer_audio_recv chunk #%lu len=%u ts=%lldms",
+                             (unsigned long)s_answer_chunk_count, (unsigned)out_len,
+                             (long long)now_ms);
                     mp3_player_enqueue(mp3, out_len);
+                } else {
+                    ESP_LOGW(TAG, "base64 decode failed rc=%d out_len=%u", rc, (unsigned)out_len);
                 }
                 free(mp3);
             }
@@ -129,7 +134,10 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
         }
     } else if (strcmp(type, "done") == 0) {
         s_answer_chunk_count = 0;
-        ESP_LOGI(TAG, "recv done — resetting answer chunk counter");
+        s_first_answer_text_logged = false;
+        ESP_LOGI(TAG, "[LATENCY] done_recv ts=%lldms — signaling mp3 player",
+                 (long long)(esp_timer_get_time() / 1000));
+        mp3_player_signal_done();
     }
 }
 

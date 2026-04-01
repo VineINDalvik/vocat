@@ -1,0 +1,104 @@
+---
+alwaysApply: true
+description: "Claude-mem context from past sessions (auto-updated)"
+---
+
+# Memory Context from Past Sessions
+
+The following context is from claude-mem, a persistent memory system that tracks your coding sessions.
+
+# $CMEM esp-brookesia 2026-04-01 10:51pm GMT+8
+
+Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision
+Format: ID TIME TYPE TITLE
+Fetch details: get_observations([IDs]) | Search: mem-search skill
+
+Stats: 50 obs (13,480t read) | 3,060,105t work | 100% savings
+
+### Apr 1, 2026
+S89 Diagnose and fix missing audio and done messages in WebSocket communication. (Apr 1 at 10:04 PM)
+S90 Analyze and adjust server-side recommendation logic and WebSocket buffer size. (Apr 1 at 10:14 PM)
+1020 10:14p 🔴 Handle Fragmented WebSocket Messages
+S91 Flash ESP-IDF project and initiate monitor mode for testing. (Apr 1 at 10:19 PM)
+1021 10:19p 🔵 Server-Side Recommendation Logic Analysis Request
+1022 " ✅ ESP-IDF Project Build and Configuration
+1023 10:20p ✅ ESP-IDF Project Build Completion
+1024 " 🔴 ESP-IDF Project Flashed to Device
+S92 Analyze client and server logs for recommendation logic. (Apr 1 at 10:20 PM)
+S93 Capture and provide client and server logs for a complete host mode session. (Apr 1 at 10:22 PM)
+1025 10:24p 🔵 Search for Latency Logs in Project History
+1026 " 🔵 Image Cache Contents
+1027 10:25p 🔵 Retrieve Image from Cache
+1028 " 🔵 Retrieve Image from Cache
+S94 Flash device and summarize recent code fixes and log path updates. (Apr 1 at 10:26 PM)
+1029 10:27p ✅ Code Modifications for WebSocket and MP3 Playback
+1030 10:28p ✅ Refined Transcription Logging in WebSocket Session
+1031 " ✅ MP3 Player Silence Insertion and Unmuting Logic
+1032 " 🔵 Memory Index Contents
+1033 " 🔵 ClarityX API Reference
+1034 10:29p ✅ Updated Log Path Information in ClarityX API Documentation
+1035 " ✅ ESP-IDF Build Environment Setup and Project Build
+1036 " 🔵 Filtered Build Output
+1037 10:30p ✅ Flashing Project to ESP32-S3 Device
+S95 Flash device and summarize root cause analysis and fix for audio playback issues. (Apr 1 at 10:30 PM)
+1038 10:31p 🔵 Client Serial Log Analysis
+1039 " 🔵 Server Log Analysis during Meeting Session
+1040 10:34p 🔴 Fixed TTS audio sequence and coherence issues
+1041 " 🔵 Code Snippet from host_ws.c
+1042 " ✅ Improved VAD Resumption Logic in host_ws.c
+1043 10:35p ✅ Re-build Project After Code Modification
+1044 " ✅ Re-flashed Device with Updated Firmware
+S96 Summarize root cause analysis and proposed fix for audio playback issues. (Apr 1 at 10:35 PM)
+1046 10:38p 🔵 MP3 Player Implementation Details
+1047 " 🔵 Host WebSocket Communication Logic
+1045 " 🔵 Server-side Recommendation Logic Analysis
+1048 10:39p 🔵 Locate pipeline_ws.c
+1049 " 🔵 Pipeline WS Audio Handling
+1051 10:40p 🟣 Enhanced WebSocket message handling with larger buffer and reassembly
+1050 " 🔴 Resolved TTS audio playback order and coherence issues
+1052 10:41p 🔵 Header File Contents
+1053 10:42p ✅ Added WS Dump File Path to API Documentation
+S97 Analyze and fix TTS audio playback issues, specifically jumbled sequences and nonsensical output. (Apr 1 at 10:42 PM)
+1054 10:44p 🔴 Corrected TTS audio sequence and coherence
+1055 10:48p 🔵 Pipeline WS Header File
+1056 " 🔵 MP3 Player Header File
+1057 " ✅ Added Ring Buffer Drained Flag
+1058 " ✅ Implement Player Write and Drained Check
+1059 " ✅ Set Drained Flag on Underrun
+1060 " ✅ Declare Player Drained Check Function
+1061 " ✅ Added Boolean Header Include
+1062 " 🔵 Pipeline WS Header File Review
+1063 10:49p ✅ Added MP3 Player Pending Check Function
+1064 " ✅ Synchronize MP3 Player Unmute with Audio Pipeline Drain
+1065 " ✅ Implement MP3 Player Pending Check
+1066 " ✅ Include MP3 Player Header
+1067 " ✅ Refined VAD Resume Condition
+1068 " ✅ Reset Drained Flag on Player Open
+1070 " 🔵 Project Configuration and Build Notes
+S98 Fix out-of-order TTS playback by addressing early microphone unmuting and race conditions. (Apr 1 at 10:51 PM)
+**Investigated**: - Analyzed the timing of TTS playback completion (`g_mic_muted` becoming false) relative to MP3 playback and microphone unmuting.
+    - Examined the logic for resuming VAD after TTS playback.
+    - Investigated potential race conditions between receiving a 'done' message and the MP3 player starting playback.
+    - Reviewed the implementation of the MP3 player's busy state and queue status.
+    - Inspected the audio pipeline's ring buffer drain mechanism.
+
+**Learned**: - A fixed delay for unmuting the microphone after MP3 playback was insufficient, leading to VAD picking up TTS audio.
+    - The audio pipeline's ring buffer drain status is a more reliable indicator for unmuting than a fixed delay.
+    - A race condition exists where a 'done' message might be processed before the MP3 player has even started, causing premature VAD resumption.
+    - The `mp3_player_pending()` function is necessary to accurately determine if the MP3 player has any queued data or is actively busy.
+
+**Completed**: - Modified `mp3_player.c` to poll for audio pipeline drain status before unmuting the microphone, replacing the fixed delay.
+    - Implemented `mp3_player_pending()` in `mp3_player.c` to check if the MP3 player is busy or has queued data.
+    - Updated `host_ws.c` to include `mp3_player_pending()` in the condition for resuming VAD, ensuring both TTS is finished and the MP3 player has no pending data.
+    - Included `mp3_player.h` in `host_ws.c`.
+    - Reset the `s_play_drained` flag to `false` upon player initialization in `pipeline_ws.c`.
+    - Successfully built the project using the correct ESP-IDF environment setup.
+    - Successfully flashed the firmware using OpenOCD.
+
+**Next Steps**: Continue testing the implemented fixes to confirm out-of-order TTS playback and VAD race conditions are resolved.
+
+
+Access 3060k tokens of past work via get_observations([IDs]) or mem-search skill.
+
+---
+*Updated after last session. Use claude-mem's MCP search tools for more detailed queries.*

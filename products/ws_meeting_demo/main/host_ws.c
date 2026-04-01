@@ -5,6 +5,7 @@
 #include "pipeline_ws.h"
 #include "vad.h"
 #include "ws_session.h"
+#include "mp3_player.h"
 #include "esp_websocket_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -16,6 +17,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <inttypes.h>
+#include "esp_system.h"
 
 static const char *TAG = "host_ws";
 
@@ -104,12 +107,15 @@ static void feed_task(void *arg)
             s_sending = false;
         }
 
-        if (s_got_done) {
+        // Only resume listening after TTS has finished playing (g_mic_muted goes false)
+        // AND the mp3 player has no more pending chunks (closes the race where 'done'
+        // arrives before mp3_task even starts playing the first chunk).
+        if (s_got_done && !g_mic_muted && !mp3_player_pending()) {
             s_got_done = false;
             s_sending  = true;
             audio_frame_count = 0;
             vad_reset(&vad);
-            ESP_LOGI(TAG, "recv done, resuming VAD");
+            ESP_LOGI(TAG, "recv done + TTS finished, resuming VAD");
         }
     }
 
@@ -129,35 +135,114 @@ static void feed_task(void *arg)
     vTaskDelete(NULL);
 }
 
+static uint32_t s_ws_evt_total = 0;
+
+/* ── Fragment reassembly buffer ─────────────────────────────────────────── */
+static char   *s_reasm_buf  = NULL;   // heap buffer for current fragmented message
+static int     s_reasm_len  = 0;      // total expected bytes (payload_len)
+static int     s_reasm_got  = 0;      // bytes accumulated so far
+
+static void reasm_free(void)
+{
+    free(s_reasm_buf);
+    s_reasm_buf = NULL;
+    s_reasm_len = 0;
+    s_reasm_got = 0;
+}
+
+/* Process a fully-received JSON text message (either direct or reassembled). */
+static void process_ws_message(const char *data, int len)
+{
+    cJSON *root = cJSON_Parse(data);
+    if (!root) {
+        ESP_LOGE(TAG, "[DROP-JSON] len=%d peek=%.80s", len, data);
+        return;
+    }
+
+    cJSON *type_j = cJSON_GetObjectItemCaseSensitive(root, "type");
+    if (!cJSON_IsString(type_j)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    const char *type = type_j->valuestring;
+    ESP_LOGI(TAG, "recv %s (len=%d evt#%"PRIu32")", type, len, s_ws_evt_total);
+
+    if (strcmp(type, "done") == 0) {
+        s_got_done = true;
+    }
+    if (s_msg_cb) {
+        s_msg_cb(type, root, s_msg_cb_ctx);
+    }
+    cJSON_Delete(root);
+}
+
 static void ws_event_handler(void *arg, esp_event_base_t base,
                               int32_t event_id, void *event_data)
 {
     if (event_id == WEBSOCKET_EVENT_DATA) {
         esp_websocket_event_data_t *d = (esp_websocket_event_data_t *)event_data;
-        if (d->op_code != 1 || d->data_len <= 0) return; // text frames only
+        s_ws_evt_total++;
 
-        char *tmp = malloc((size_t)d->data_len + 1);
-        if (!tmp) return;
-        memcpy(tmp, d->data_ptr, d->data_len);
-        tmp[d->data_len] = '\0';
-
-        cJSON *root = cJSON_Parse(tmp);
-        free(tmp);
-        if (!root) return;
-
-        cJSON *type_j = cJSON_GetObjectItemCaseSensitive(root, "type");
-        if (cJSON_IsString(type_j)) {
-            const char *type = type_j->valuestring;
-            ESP_LOGI(TAG, "recv %s", type);
-
-            if (strcmp(type, "done") == 0) {
-                s_got_done = true;
+        if (d->op_code != 1 || d->data_len <= 0) {
+            if (d->op_code != 10 && d->op_code != 9) {
+                ESP_LOGW(TAG, "[DROP] op=%d data_len=%d (evt#%"PRIu32")",
+                         d->op_code, d->data_len, s_ws_evt_total);
             }
-            if (s_msg_cb) {
-                s_msg_cb(type, root, s_msg_cb_ctx);
-            }
+            return;
         }
-        cJSON_Delete(root);
+
+        int payload_len = (int)d->payload_len;
+        int data_len    = d->data_len;
+        int offset      = (int)d->payload_offset;
+
+        /* ── Case A: complete (non-fragmented) message ───────────── */
+        if (payload_len == data_len) {
+            char *tmp = malloc((size_t)data_len + 1);
+            if (!tmp) {
+                ESP_LOGE(TAG, "[DROP-MALLOC] len=%d heap=%"PRIu32,
+                         data_len, (uint32_t)esp_get_free_heap_size());
+                return;
+            }
+            memcpy(tmp, d->data_ptr, data_len);
+            tmp[data_len] = '\0';
+            process_ws_message(tmp, data_len);
+            free(tmp);
+            return;
+        }
+
+        /* ── Case B: fragmented message — reassemble ─────────────── */
+        if (offset == 0) {
+            reasm_free();
+            if (payload_len > 256 * 1024) {
+                ESP_LOGE(TAG, "[DROP-TOOBIG] payload=%d", payload_len);
+                return;
+            }
+            s_reasm_buf = malloc((size_t)payload_len + 1);
+            if (!s_reasm_buf) {
+                ESP_LOGE(TAG, "[DROP-MALLOC-REASM] payload=%d heap=%"PRIu32,
+                         payload_len, (uint32_t)esp_get_free_heap_size());
+                return;
+            }
+            s_reasm_len = payload_len;
+            s_reasm_got = 0;
+        }
+
+        if (!s_reasm_buf || offset != s_reasm_got || offset + data_len > s_reasm_len) {
+            ESP_LOGE(TAG, "[DROP-REASM-SEQ] off=%d got=%d data=%d total=%d",
+                     offset, s_reasm_got, data_len, s_reasm_len);
+            reasm_free();
+            return;
+        }
+
+        memcpy(s_reasm_buf + offset, d->data_ptr, data_len);
+        s_reasm_got += data_len;
+
+        if (s_reasm_got == s_reasm_len) {
+            s_reasm_buf[s_reasm_len] = '\0';
+            process_ws_message(s_reasm_buf, s_reasm_len);
+            reasm_free();
+        }
 
     } else if (event_id == WEBSOCKET_EVENT_CONNECTED) {
         ESP_LOGI(TAG, "[OK] WS connected");
@@ -182,7 +267,7 @@ esp_err_t host_ws_connect(const char *session_id)
 
     esp_websocket_client_config_t cfg = {
         .uri                         = uri,
-        .buffer_size                 = 16384,
+        .buffer_size                 = 131072,  // 128KB: answer_audio JSON (MP3 base64) can exceed 16KB
         .task_stack                  = 8192,
         .task_prio                   = 5,
         .skip_cert_common_name_check = true,

@@ -56,7 +56,7 @@ static void feed_task(void *arg)
 
         int jlen = snprintf(json_buf, sizeof(json_buf),
                             "{\"type\":\"audio\",\"data\":\"%s\"}", b64_buf);
-        esp_websocket_client_send_text(s_ws, json_buf, jlen, pdMS_TO_TICKS(100));
+        esp_websocket_client_send_text(s_ws, json_buf, jlen, pdMS_TO_TICKS(500));
 
         frame_count++;
         if (frame_count % 100 == 0) {
@@ -94,18 +94,20 @@ esp_err_t transcribe_ws_connect(const char *session_id)
     ESP_LOGI(TAG, "connecting %s", uri);
 
     esp_websocket_client_config_t cfg = {
-        .uri         = uri,
-        .buffer_size = 8192,
-        .task_stack  = 8192,
-        .task_prio   = 5,
+        .uri                         = uri,
+        .buffer_size                 = 16384,
+        .task_stack                  = 8192,
+        .task_prio                   = 5,
         .skip_cert_common_name_check = true,
+        .network_timeout_ms          = 30000,
+        .reconnect_timeout_ms        = 10000,
     };
     s_ws = esp_websocket_client_init(&cfg);
     esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY, ws_event_handler, NULL);
     esp_websocket_client_start(s_ws);
 
-    // Wait up to 5s for connection
-    for (int i = 0; i < 50; i++) {
+    // Wait up to 15s for connection (TLS handshake can take >5s)
+    for (int i = 0; i < 150; i++) {
         if (esp_websocket_client_is_connected(s_ws)) break;
         vTaskDelay(pdMS_TO_TICKS(100));
     }

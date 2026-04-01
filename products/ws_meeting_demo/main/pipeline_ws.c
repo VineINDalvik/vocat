@@ -47,10 +47,10 @@ static const char *TAG = "pipeline_ws";
 #define CODEC_CHANNELS      (2)
 
 // ---------------------------------------------------------------------------
-// Playback ring buffer: 1000ms of 16kHz 16bit mono PCM = 32000 bytes
+// Playback ring buffer: 3000ms of 16kHz 16bit mono PCM = 96000 bytes
 // ---------------------------------------------------------------------------
-#define PLAY_RB_SIZE        (32000)
-#define PLAY_PRE_ROLL_BYTES (4800)    // 150ms pre-roll at 16kHz 16bit mono
+#define PLAY_RB_SIZE        (96000)
+#define PLAY_PRE_ROLL_BYTES (9600)    // 300ms pre-roll at 16kHz 16bit mono
 #define PLAY_TASK_STACK     (8 * 1024)
 #define PLAY_TASK_PRIORITY  (7)
 #define PLAY_TASK_CORE      (0)
@@ -76,6 +76,7 @@ static TaskHandle_t              s_play_task       = NULL;
 static volatile bool             s_play_task_run   = false;
 static SemaphoreHandle_t         s_play_done_sem   = NULL;
 static volatile size_t           s_pre_roll_written = 0; // bytes written since last open/underrun
+static volatile bool             s_play_drained     = false; // true when ring buffer has emptied
 
 // ---------------------------------------------------------------------------
 // Sample format helpers
@@ -185,7 +186,7 @@ esp_err_t pipeline_ws_hw_init(void)
         .sample_rate = CODEC_SAMPLE_RATE, .channel = CODEC_CHANNELS, .bits_per_sample = CODEC_BITS,
     };
     ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_play_dev, &play_info), TAG, "ES8311 open failed");
-    ESP_RETURN_ON_ERROR(esp_codec_dev_set_out_vol(s_play_dev, 70), TAG, "ES8311 set vol failed");
+    ESP_RETURN_ON_ERROR(esp_codec_dev_set_out_vol(s_play_dev, 93), TAG, "ES8311 set vol failed");
     ESP_LOGI(TAG, "[OK] ES8311 (DAC) ready");
 
     // ES7210 (ADC)
@@ -280,43 +281,43 @@ esp_err_t pipeline_ws_recorder_close(void)
 // ---------------------------------------------------------------------------
 static void player_task(void *arg)
 {
-    // Output frame: 320 stereo 32-bit samples = 2560 bytes = 20ms at 16kHz
-    int32_t out_buf[320 * 2];
-    // Accumulation buffer: collect exactly 320 mono 16-bit samples before emitting
-    int16_t acc_buf[320];
-    int     acc_frames = 0;
-    bool    playing    = false;
+    int32_t out_buf[320 * 2];   // 20ms I2S frame: 320 stereo 32-bit samples
+    int16_t acc_buf[320];       // accumulate 320 mono 16-bit samples
+    int     acc_frames  = 0;
+    bool    playing     = false;
+    int     empty_runs  = 0;    // consecutive empty reads (grace period counter)
 
     while (s_play_task_run) {
 
-        // ---- Pre-roll gate ------------------------------------------------
+        /* ── Pre-roll gate ─────────────────────────────────────────── */
         if (!playing) {
             if (s_pre_roll_written >= PLAY_PRE_ROLL_BYTES) {
                 playing = true;
+                empty_runs = 0;
                 ESP_LOGI(TAG, "[OK] pre-roll reached %u bytes, starting playback",
                          (unsigned)s_pre_roll_written);
             } else {
-                // Keep I2S clock running with silence while buffering
                 memset(out_buf, 0, sizeof(out_buf));
                 esp_codec_dev_write(s_play_dev, out_buf, sizeof(out_buf));
                 continue;
             }
         }
 
-        // ---- Drain ring buffer into accumulation buffer -------------------
+        /* ── Drain ring buffer ─────────────────────────────────────── */
         size_t need = (size_t)(320 - acc_frames) * sizeof(int16_t);
         size_t rx_len = 0;
         int16_t *pcm = (int16_t *)xRingbufferReceiveUpTo(
-            s_play_rb, &rx_len, pdMS_TO_TICKS(5), need);
+            s_play_rb, &rx_len, pdMS_TO_TICKS(20), need);
 
         if (pcm && rx_len > 0) {
             int got = (int)(rx_len / sizeof(int16_t));
             memcpy(acc_buf + acc_frames, pcm, (size_t)got * sizeof(int16_t));
             vRingbufferReturnItem(s_play_rb, pcm);
             acc_frames += got;
+            empty_runs = 0;
         }
 
-        // ---- Emit only when accumulation buffer is full -------------------
+        /* ── Emit when accumulation buffer is full ─────────────────── */
         if (acc_frames >= 320) {
             conv_16m_to_32s(acc_buf, out_buf, 320);
             esp_codec_dev_write(s_play_dev, out_buf, sizeof(out_buf));
@@ -324,10 +325,11 @@ static void player_task(void *arg)
             continue;
         }
 
-        // ---- True underrun: flush partial + re-arm pre-roll ---------------
+        /* ── Empty read: output silence, count towards underrun ───── */
         if (pcm == NULL || rx_len == 0) {
+            empty_runs++;
+
             if (acc_frames > 0) {
-                // Flush what we have; zero-pad the rest of the I2S frame
                 conv_16m_to_32s(acc_buf, out_buf, acc_frames);
                 memset(out_buf + acc_frames * 2, 0,
                        (size_t)(320 - acc_frames) * 2 * sizeof(int32_t));
@@ -337,9 +339,14 @@ static void player_task(void *arg)
                 memset(out_buf, 0, sizeof(out_buf));
                 esp_codec_dev_write(s_play_dev, out_buf, sizeof(out_buf));
             }
-            // Re-arm pre-roll so the next audio burst buffers before playing
-            s_pre_roll_written = 0;
-            playing = false;
+
+            // 5 consecutive empty reads × 20ms = 100ms grace before true underrun
+            if (empty_runs >= 5) {
+                s_pre_roll_written = 0;
+                s_play_drained = true;
+                playing = false;
+                empty_runs = 0;
+            }
         }
     }
 
@@ -366,6 +373,7 @@ esp_err_t pipeline_ws_player_open(void)
     }
 
     s_pre_roll_written = 0;
+    s_play_drained = false;
     s_play_task_run = true;
     BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
         player_task, "play_task", PLAY_TASK_STACK, NULL,
@@ -385,11 +393,17 @@ esp_err_t pipeline_ws_player_open(void)
 esp_err_t pipeline_ws_player_write_pcm(const int16_t *pcm, int frames)
 {
     if (!s_play_open || !s_play_rb) return ESP_ERR_INVALID_STATE;
+    s_play_drained = false;
     s_pre_roll_written += (size_t)frames * sizeof(int16_t);
     BaseType_t ok = xRingbufferSend(s_play_rb, pcm,
                                      (size_t)frames * sizeof(int16_t),
                                      pdMS_TO_TICKS(200));
     return (ok == pdTRUE) ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+bool pipeline_ws_player_is_drained(void)
+{
+    return s_play_drained;
 }
 
 esp_err_t pipeline_ws_player_close(void)

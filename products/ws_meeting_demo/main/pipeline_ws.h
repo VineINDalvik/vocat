@@ -10,6 +10,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -31,6 +32,7 @@ esp_err_t pipeline_ws_recorder_close(void);
 esp_err_t pipeline_ws_player_open(void);
 esp_err_t pipeline_ws_player_write_pcm(const int16_t *pcm, int frames);
 esp_err_t pipeline_ws_player_close(void);
+bool      pipeline_ws_player_is_drained(void);
 
 esp_err_t pipeline_ws_set_volume(int volume);
 
