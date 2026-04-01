@@ -47,9 +47,10 @@ static const char *TAG = "pipeline_ws";
 #define CODEC_CHANNELS      (2)
 
 // ---------------------------------------------------------------------------
-// Playback ring buffer: 500ms of 16kHz 16bit mono PCM = 16000 bytes
+// Playback ring buffer: 1000ms of 16kHz 16bit mono PCM = 32000 bytes
 // ---------------------------------------------------------------------------
-#define PLAY_RB_SIZE        (16000)
+#define PLAY_RB_SIZE        (32000)
+#define PLAY_PRE_ROLL_BYTES (4800)    // 150ms pre-roll at 16kHz 16bit mono
 #define PLAY_TASK_STACK     (8 * 1024)
 #define PLAY_TASK_PRIORITY  (7)
 #define PLAY_TASK_CORE      (0)
@@ -74,6 +75,7 @@ static RingbufHandle_t           s_play_rb         = NULL;
 static TaskHandle_t              s_play_task       = NULL;
 static volatile bool             s_play_task_run   = false;
 static SemaphoreHandle_t         s_play_done_sem   = NULL;
+static volatile size_t           s_pre_roll_written = 0; // bytes written since last open/underrun
 
 // ---------------------------------------------------------------------------
 // Sample format helpers
@@ -278,27 +280,67 @@ esp_err_t pipeline_ws_recorder_close(void)
 // ---------------------------------------------------------------------------
 static void player_task(void *arg)
 {
-    // 20ms output frame: 320 samples × 2ch × 4bytes = 2560 bytes
+    // Output frame: 320 stereo 32-bit samples = 2560 bytes = 20ms at 16kHz
     int32_t out_buf[320 * 2];
+    // Accumulation buffer: collect exactly 320 mono 16-bit samples before emitting
+    int16_t acc_buf[320];
+    int     acc_frames = 0;
+    bool    playing    = false;
 
     while (s_play_task_run) {
+
+        // ---- Pre-roll gate ------------------------------------------------
+        if (!playing) {
+            if (s_pre_roll_written >= PLAY_PRE_ROLL_BYTES) {
+                playing = true;
+                ESP_LOGI(TAG, "[OK] pre-roll reached %u bytes, starting playback",
+                         (unsigned)s_pre_roll_written);
+            } else {
+                // Keep I2S clock running with silence while buffering
+                memset(out_buf, 0, sizeof(out_buf));
+                esp_codec_dev_write(s_play_dev, out_buf, sizeof(out_buf));
+                continue;
+            }
+        }
+
+        // ---- Drain ring buffer into accumulation buffer -------------------
+        size_t need = (size_t)(320 - acc_frames) * sizeof(int16_t);
         size_t rx_len = 0;
         int16_t *pcm = (int16_t *)xRingbufferReceiveUpTo(
-            s_play_rb, &rx_len, pdMS_TO_TICKS(20), 640);
-        if (pcm == NULL || rx_len == 0) {
-            // Starvation: write silence to keep I2S clock running
-            memset(out_buf, 0, sizeof(out_buf));
+            s_play_rb, &rx_len, pdMS_TO_TICKS(5), need);
+
+        if (pcm && rx_len > 0) {
+            int got = (int)(rx_len / sizeof(int16_t));
+            memcpy(acc_buf + acc_frames, pcm, (size_t)got * sizeof(int16_t));
+            vRingbufferReturnItem(s_play_rb, pcm);
+            acc_frames += got;
+        }
+
+        // ---- Emit only when accumulation buffer is full -------------------
+        if (acc_frames >= 320) {
+            conv_16m_to_32s(acc_buf, out_buf, 320);
             esp_codec_dev_write(s_play_dev, out_buf, sizeof(out_buf));
+            acc_frames = 0;
             continue;
         }
-        int frames = (int)(rx_len / sizeof(int16_t));
-        conv_16m_to_32s(pcm, out_buf, frames);
-        vRingbufferReturnItem(s_play_rb, pcm);
-        int write_bytes = frames * 2 * (int)sizeof(int32_t);
-        if (write_bytes < (int)sizeof(out_buf)) {
-            memset((uint8_t *)out_buf + write_bytes, 0, sizeof(out_buf) - write_bytes);
+
+        // ---- True underrun: flush partial + re-arm pre-roll ---------------
+        if (pcm == NULL || rx_len == 0) {
+            if (acc_frames > 0) {
+                // Flush what we have; zero-pad the rest of the I2S frame
+                conv_16m_to_32s(acc_buf, out_buf, acc_frames);
+                memset(out_buf + acc_frames * 2, 0,
+                       (size_t)(320 - acc_frames) * 2 * sizeof(int32_t));
+                esp_codec_dev_write(s_play_dev, out_buf, sizeof(out_buf));
+                acc_frames = 0;
+            } else {
+                memset(out_buf, 0, sizeof(out_buf));
+                esp_codec_dev_write(s_play_dev, out_buf, sizeof(out_buf));
+            }
+            // Re-arm pre-roll so the next audio burst buffers before playing
+            s_pre_roll_written = 0;
+            playing = false;
         }
-        esp_codec_dev_write(s_play_dev, out_buf, sizeof(out_buf));
     }
 
     if (s_play_done_sem) xSemaphoreGive(s_play_done_sem);
@@ -323,6 +365,7 @@ esp_err_t pipeline_ws_player_open(void)
         return ESP_ERR_NO_MEM;
     }
 
+    s_pre_roll_written = 0;
     s_play_task_run = true;
     BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
         player_task, "play_task", PLAY_TASK_STACK, NULL,
@@ -342,9 +385,10 @@ esp_err_t pipeline_ws_player_open(void)
 esp_err_t pipeline_ws_player_write_pcm(const int16_t *pcm, int frames)
 {
     if (!s_play_open || !s_play_rb) return ESP_ERR_INVALID_STATE;
+    s_pre_roll_written += (size_t)frames * sizeof(int16_t);
     BaseType_t ok = xRingbufferSend(s_play_rb, pcm,
                                      (size_t)frames * sizeof(int16_t),
-                                     pdMS_TO_TICKS(5));
+                                     pdMS_TO_TICKS(200));
     return (ok == pdTRUE) ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
