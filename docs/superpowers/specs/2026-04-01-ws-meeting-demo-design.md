@@ -109,7 +109,37 @@ esp_err_t api_client_create_session(const char *topic,
 esp_err_t api_client_end_session(const char *session_id);
 ```
 
-- Base URL 从 Kconfig `CONFIG_WS_MEETING_API_BASE_URL` 读取（默认 `https://ailabs.mayfair-inc.net/voice-api`）
+**接口详情：**
+
+**POST /api/session — 创建会议**
+
+请求体（Content-Type: application/json）：
+```json
+{ "topic": "产品评审会" }
+```
+- `topic`：可选，默认 "未命名会议"；从 `CONFIG_WS_MEETING_TOPIC` 读取
+
+成功响应（HTTP 200）：
+```json
+{ "session_id": "sess-abc123def456", "created_at": "2026-03-24T10:30:00.000000+00:00" }
+```
+- 代码只需提取 `session_id` 字段
+
+**POST /api/session/{session_id}/end — 结束会议**
+
+无请求体；成功响应（HTTP 200）：
+```json
+{ "status": "ended", "transcript_count": 42 }
+```
+- 成功判断：HTTP status == 200，无需解析响应体
+
+**URL 拼接注意（⚠️ 双路径陷阱）：**
+- Base URL 末尾已含 `/voice-api`：`https://ailabs.mayfair-inc.net/voice-api`
+- 路径直接拼接：`/api/session`、`/api/session/{id}/end`
+- 最终 URL 示例：`https://ailabs.mayfair-inc.net/voice-api/api/session`
+- **禁止**在 Base URL 之后再次拼接 `/voice-api`
+
+**其他配置：**
 - HTTPS：需要配置 `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y`（开发阶段）或内嵌根证书
 - 超时 10s，失败返回 `ESP_FAIL`
 
@@ -216,6 +246,8 @@ while (running):
 - 帧大小：3200 bytes = 16000Hz × 2bytes × 0.1s（100ms，符合 API 文档推荐）
 - Base64 后约 4268 字节，JSON 总长约 4290 字节
 - WS 发送非阻塞（`esp_websocket_client_send_text` 内部有队列）
+- **服务端不下发任何消息**（纯单向，`WEBSOCKET_EVENT_DATA` 在此接口永远不会触发）
+- 注意：transcribe WS 与 host WS 可同时连接；本设计选择进入 HOST 模式时断开 transcribe WS（减少带宽），退出时重新连接
 
 ### 4.5 host_ws.c
 
@@ -262,13 +294,25 @@ while (running):
 
 **WS 消息接收（`WEBSOCKET_EVENT_DATA` 回调，esp_websocket_client 内部 task）：**
 
+服务端下发消息格式（完整 JSON 结构）：
+
+| 消息 | JSON 格式 | 字段说明 |
+|------|-----------|---------|
+| 问题转写 | `{"type":"transcription","text":"..."}` | `text`：ASR 识别出的问题文本 |
+| 流式文本 | `{"type":"answer_text","text":"...","done":false}` | `text`：当前片段；`done=true` 时 text 为空字符串，表示文本流结束 |
+| TTS 音频 | `{"type":"answer_audio","data":"<base64_mp3>"}` | `data`：Base64 编码的 MP3 数据，24kHz，每条消息是一个完整句子 |
+| 完成 | `{"type":"done"}` | 无其他字段，一轮 Q&A 完成 |
+| 错误 | `{"type":"error","message":"..."}` | `message`：错误描述 |
+
+收到各类消息后的处理动作：
+
 | type | 动作 |
 |------|------|
-| `transcription` | `ws_session_update_ui_status("Q: " + text)` |
-| `answer_text` | 追加到 UI status（done=true 时换行） |
-| `answer_audio` | base64 解码 → `mp3_player_enqueue(data, len)` |
+| `transcription` | `ws_session_update_ui_status("Q: " + msg.text)` |
+| `answer_text` | 追加 `msg.text` 到 UI status（`msg.done==true` 时换行） |
+| `answer_audio` | base64 解码 `msg.data` → `mp3_player_enqueue(data, len)` |
 | `done` | 设置 `g_got_done_signal = true`（原子操作） |
-| `error` | `ws_session_update_ui_status("Error: " + message)` |
+| `error` | `ws_session_update_ui_status("Error: " + msg.message)` |
 
 ### 4.6 mp3_player.c
 
