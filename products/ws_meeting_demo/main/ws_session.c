@@ -32,9 +32,6 @@ typedef enum {
 
 typedef struct { cmd_type_t type; } session_cmd_t;
 
-static void enqueue_cmd(cmd_type_t type);  // forward declaration
-static void do_enter_host(void);           // forward declaration
-
 static QueueHandle_t      s_cmd_queue = NULL;
 static ws_session_state_t s_state     = WS_SESSION_IDLE;
 static char               s_session_id[64] = {0};
@@ -220,26 +217,17 @@ static void do_stop_meeting(void)
     }
 }
 
+static void enqueue_cmd(cmd_type_t type)
+{
+    if (!s_cmd_queue) return;
+    session_cmd_t cmd = {.type = type};
+    xQueueSend(s_cmd_queue, &cmd, 0);
+}
+
 static void on_host_session_rejected(void *ctx)
 {
     (void)ctx;
     enqueue_cmd(CMD_RECREATE_SESSION_HOST);
-}
-
-static void do_recreate_session_host(void)
-{
-    ESP_LOGI(TAG, "session rejected — ending old session and creating new one");
-    api_client_end_session(s_session_id);
-    memset(s_session_id, 0, sizeof(s_session_id));
-
-    if (api_client_create_session(NULL, s_session_id, sizeof(s_session_id)) != ESP_OK) {
-        ESP_LOGE(TAG, "[FAIL] recreate_session_host: session create failed");
-        set_state(WS_SESSION_ERROR);
-        ws_session_update_ui_status("Connection Error");
-        return;
-    }
-    ESP_LOGI(TAG, "[OK] new session: %s", s_session_id);
-    do_enter_host();
 }
 
 static void do_enter_host(void)
@@ -263,6 +251,22 @@ static void do_enter_host(void)
         bsp_display_unlock();
     }
     ws_session_update_ui_status("Listening...");
+}
+
+static void do_recreate_session_host(void)
+{
+    ESP_LOGI(TAG, "session rejected — ending old session and creating new one");
+    api_client_end_session(s_session_id);
+    memset(s_session_id, 0, sizeof(s_session_id));
+
+    if (api_client_create_session(NULL, s_session_id, sizeof(s_session_id)) != ESP_OK) {
+        ESP_LOGE(TAG, "[FAIL] recreate_session_host: session create failed");
+        set_state(WS_SESSION_ERROR);
+        ws_session_update_ui_status("Connection Error");
+        return;
+    }
+    ESP_LOGI(TAG, "[OK] new session: %s", s_session_id);
+    do_enter_host();
 }
 
 static void do_exit_host(void)
@@ -302,13 +306,6 @@ static void session_cmd_task(void *arg)
         case CMD_RECREATE_SESSION_HOST:  do_recreate_session_host();  break;
         }
     }
-}
-
-static void enqueue_cmd(cmd_type_t type)
-{
-    if (!s_cmd_queue) return;
-    session_cmd_t cmd = {.type = type};
-    xQueueSend(s_cmd_queue, &cmd, 0);
 }
 
 // ---------------------------------------------------------------------------
