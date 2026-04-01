@@ -101,8 +101,9 @@ static void mp3_play_task(void *arg)
                 chunk.data + offset,
                 (int)chunk.len - offset,
                 pcm_raw, &info);
-            if (samples <= 0 || info.frame_bytes <= 0) break;
+            if (info.frame_bytes <= 0) break;  // truly no progress — end of decodable data
             offset += info.frame_bytes;
+            if (samples <= 0) continue;        // skipped preamble/junk, keep scanning
             mp3_frames++;
 
             if (first_frame) {
@@ -162,7 +163,7 @@ esp_err_t mp3_player_open(void)
     s_task_run = true;
     BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
         mp3_play_task, "mp3_play", 32 * 1024, NULL, 7,
-        &s_task, 0,
+        &s_task, 1,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ret != pdPASS) {
         vQueueDelete(s_queue); s_queue = NULL;
