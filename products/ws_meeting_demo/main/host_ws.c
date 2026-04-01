@@ -30,6 +30,9 @@ static host_ws_msg_cb_t              s_msg_cb          = NULL;
 static void                         *s_msg_cb_ctx      = NULL;
 static volatile bool                 s_got_done        = false;
 static volatile bool                 s_sending         = false;
+static volatile bool          s_session_rejected  = false;
+static host_ws_rejected_cb_t  s_rejected_cb       = NULL;
+static void                  *s_rejected_cb_ctx   = NULL;
 
 void host_ws_set_callback(host_ws_msg_cb_t cb, void *ctx)
 {
@@ -45,6 +48,12 @@ static void build_ws_uri(char *out, size_t len, const char *path, const char *se
     snprintf(out, len, "wss://%s%s/%s", host, path, session_id);
 }
 
+void host_ws_set_rejected_cb(host_ws_rejected_cb_t cb, void *ctx)
+{
+    s_rejected_cb     = cb;
+    s_rejected_cb_ctx = ctx;
+}
+
 static void feed_task(void *arg)
 {
     ESP_LOGI(TAG, "[OK] feed task started");
@@ -56,6 +65,10 @@ static void feed_task(void *arg)
     uint32_t audio_frame_count = 0;
 
     while (s_feed_run) {
+        if (s_session_rejected) {
+            s_feed_run = false;
+            break;
+        }
         int got = pipeline_ws_recorder_read(pcm_buf, FRAME_BYTES);
         if (got != FRAME_BYTES) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
         if (!esp_websocket_client_is_connected(s_ws)) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
@@ -100,7 +113,19 @@ static void feed_task(void *arg)
         }
     }
 
+    // If rejected by server (403), safely stop+destroy WS client from this task
+    // (cannot call esp_websocket_client_stop from within the WS event handler).
+    if (s_session_rejected && s_ws) {
+        esp_websocket_client_stop(s_ws);
+        esp_websocket_client_destroy(s_ws);
+        s_ws = NULL;
+    }
+    pipeline_ws_recorder_close();
     s_feed_task_handle = NULL;
+    if (s_session_rejected && s_rejected_cb) {
+        s_rejected_cb(s_rejected_cb_ctx);
+        s_session_rejected = false;
+    }
     vTaskDelete(NULL);
 }
 
@@ -139,7 +164,13 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
     } else if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
         ESP_LOGW(TAG, "WS disconnected");
     } else if (event_id == WEBSOCKET_EVENT_ERROR) {
-        ESP_LOGE(TAG, "WS error");
+        esp_websocket_event_data_t *d = (esp_websocket_event_data_t *)event_data;
+        if (d->error_handle.esp_ws_handshake_status_code == 403) {
+            ESP_LOGE(TAG, "WS rejected 403 — session invalid, stopping reconnect");
+            s_session_rejected = true;
+        } else {
+            ESP_LOGE(TAG, "WS error");
+        }
     }
 }
 
@@ -150,17 +181,20 @@ esp_err_t host_ws_connect(const char *session_id)
     ESP_LOGI(TAG, "connecting %s", uri);
 
     esp_websocket_client_config_t cfg = {
-        .uri         = uri,
-        .buffer_size = 16384,
-        .task_stack  = 8192,
-        .task_prio   = 5,
+        .uri                         = uri,
+        .buffer_size                 = 16384,
+        .task_stack                  = 8192,
+        .task_prio                   = 5,
         .skip_cert_common_name_check = true,
+        .network_timeout_ms          = 30000,
+        .reconnect_timeout_ms        = 10000,
     };
     s_ws = esp_websocket_client_init(&cfg);
     esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY, ws_event_handler, NULL);
     esp_websocket_client_start(s_ws);
 
-    for (int i = 0; i < 50; i++) {
+    // Wait up to 15s for connection (TLS handshake can take >5s)
+    for (int i = 0; i < 150; i++) {
         if (esp_websocket_client_is_connected(s_ws)) break;
         vTaskDelay(pdMS_TO_TICKS(100));
     }

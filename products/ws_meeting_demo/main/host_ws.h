@@ -13,6 +13,10 @@ typedef void (*host_ws_msg_cb_t)(const char *type, cJSON *root, void *ctx);
 
 void      host_ws_set_callback(host_ws_msg_cb_t cb, void *ctx);
 
+// Called (from a FreeRTOS task context) when server rejects the session with 403.
+typedef void (*host_ws_rejected_cb_t)(void *ctx);
+void host_ws_set_rejected_cb(host_ws_rejected_cb_t cb, void *ctx);
+
 // Connect wss://.../ws/host/{session_id}, open recorder, start feed task with VAD
 esp_err_t host_ws_connect(const char *session_id);
 

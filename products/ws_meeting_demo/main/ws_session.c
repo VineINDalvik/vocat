@@ -27,10 +27,13 @@ static const char *TAG = "ws_session";
 volatile bool g_mic_muted = false;
 
 typedef enum {
-    CMD_START, CMD_STOP, CMD_ENTER_HOST, CMD_EXIT_HOST,
+    CMD_START, CMD_STOP, CMD_ENTER_HOST, CMD_EXIT_HOST, CMD_RECREATE_SESSION_HOST,
 } cmd_type_t;
 
 typedef struct { cmd_type_t type; } session_cmd_t;
+
+static void enqueue_cmd(cmd_type_t type);  // forward declaration
+static void do_enter_host(void);           // forward declaration
 
 static QueueHandle_t      s_cmd_queue = NULL;
 static ws_session_state_t s_state     = WS_SESSION_IDLE;
@@ -217,11 +220,34 @@ static void do_stop_meeting(void)
     }
 }
 
+static void on_host_session_rejected(void *ctx)
+{
+    (void)ctx;
+    enqueue_cmd(CMD_RECREATE_SESSION_HOST);
+}
+
+static void do_recreate_session_host(void)
+{
+    ESP_LOGI(TAG, "session rejected — ending old session and creating new one");
+    api_client_end_session(s_session_id);
+    memset(s_session_id, 0, sizeof(s_session_id));
+
+    if (api_client_create_session(NULL, s_session_id, sizeof(s_session_id)) != ESP_OK) {
+        ESP_LOGE(TAG, "[FAIL] recreate_session_host: session create failed");
+        set_state(WS_SESSION_ERROR);
+        ws_session_update_ui_status("Connection Error");
+        return;
+    }
+    ESP_LOGI(TAG, "[OK] new session: %s", s_session_id);
+    do_enter_host();
+}
+
 static void do_enter_host(void)
 {
     ESP_LOGI(TAG, "state → HOST (entering host mode)");
     transcribe_ws_disconnect();
 
+    host_ws_set_rejected_cb(on_host_session_rejected, NULL);
     host_ws_set_callback(on_host_msg, NULL);
     if (host_ws_connect(s_session_id) != ESP_OK) {
         ESP_LOGE(TAG, "[FAIL] enter_host: WS connect failed");
@@ -269,10 +295,11 @@ static void session_cmd_task(void *arg)
         session_cmd_t cmd;
         if (xQueueReceive(s_cmd_queue, &cmd, portMAX_DELAY) != pdTRUE) continue;
         switch (cmd.type) {
-        case CMD_START:      do_start_meeting(); break;
-        case CMD_STOP:       do_stop_meeting();  break;
-        case CMD_ENTER_HOST: do_enter_host();    break;
-        case CMD_EXIT_HOST:  do_exit_host();     break;
+        case CMD_START:                  do_start_meeting();          break;
+        case CMD_STOP:                   do_stop_meeting();           break;
+        case CMD_ENTER_HOST:             do_enter_host();             break;
+        case CMD_EXIT_HOST:              do_exit_host();              break;
+        case CMD_RECREATE_SESSION_HOST:  do_recreate_session_host();  break;
         }
     }
 }
