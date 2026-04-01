@@ -9,11 +9,13 @@
 #include "ui_meeting.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_netif.h"
 #include "mbedtls/base64.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "lwip/ip4_addr.h"
 #include "lvgl.h"
 #include "bsp/esp_vocat.h"
 #include <string.h>
@@ -33,6 +35,7 @@ typedef struct { cmd_type_t type; } session_cmd_t;
 static QueueHandle_t      s_cmd_queue = NULL;
 static ws_session_state_t s_state     = WS_SESSION_IDLE;
 static char               s_session_id[64] = {0};
+static uint32_t           s_answer_chunk_count = 0;
 
 // ---------------------------------------------------------------------------
 // State transitions
@@ -83,16 +86,13 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
         }
 
     } else if (strcmp(type, "answer_text") == 0) {
-        cJSON *text_j = cJSON_GetObjectItemCaseSensitive(root, "text");
         cJSON *done_j = cJSON_GetObjectItemCaseSensitive(root, "done");
+        cJSON *text_j = cJSON_GetObjectItemCaseSensitive(root, "text");
         bool done = cJSON_IsTrue(done_j);
-        int tlen = 0;
-        if (cJSON_IsString(text_j) && text_j->valuestring) {
-            tlen = (int)strlen(text_j->valuestring);
-            if (tlen > 0) ws_session_update_ui_status(text_j->valuestring);
-        }
+        int tlen = cJSON_IsString(text_j) ? (int)strlen(text_j->valuestring) : 0;
         ESP_LOGI(TAG, "recv answer_text (done=%s) len=%d",
                  done ? "true" : "false", tlen);
+        // answer_text is not shown on UI in host mode
 
     } else if (strcmp(type, "answer_audio") == 0) {
         cJSON *data_j = cJSON_GetObjectItemCaseSensitive(root, "data");
@@ -107,12 +107,10 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
                     mp3, mp3_max, &out_len,
                     (const unsigned char *)b64, b64_n);
                 if (rc == 0 && out_len > 0) {
-                    static uint32_t chunk_count = 0;
-                    chunk_count++;
+                    s_answer_chunk_count++;
                     ESP_LOGI(TAG, "recv answer_audio chunk #%lu len=%u",
-                             (unsigned long)chunk_count, (unsigned)out_len);
-                    // Log first answer audio latency
-                    if (chunk_count == 1) {
+                             (unsigned long)s_answer_chunk_count, (unsigned)out_len);
+                    if (s_answer_chunk_count == 1) {
                         ESP_LOGI(TAG, "[LATENCY] first_answer_audio_recv ts=%lldms",
                                  (long long)(esp_timer_get_time() / 1000));
                     }
@@ -129,7 +127,36 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
             snprintf(buf, sizeof(buf), "Error: %s", msg->valuestring);
             ws_session_update_ui_status(buf);
         }
+    } else if (strcmp(type, "done") == 0) {
+        s_answer_chunk_count = 0;
+        ESP_LOGI(TAG, "recv done — resetting answer chunk counter");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Wait until the default netif has a non-zero IP (up to timeout_ms)
+// ---------------------------------------------------------------------------
+static bool wait_for_ip(uint32_t timeout_ms)
+{
+    uint32_t elapsed = 0;
+    while (elapsed < timeout_ms) {
+        esp_netif_t *netif = esp_netif_get_default_netif();
+        if (netif) {
+            esp_netif_ip_info_t ip_info;
+            if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK &&
+                !ip4_addr_isany_val(ip_info.ip)) {
+                ESP_LOGI(TAG, "IP ready: " IPSTR, IP2STR(&ip_info.ip));
+                return true;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+        elapsed += 500;
+        if (elapsed % 5000 == 0) {
+            ESP_LOGW(TAG, "waiting for IP... %lus", (unsigned long)(elapsed / 1000));
+        }
+    }
+    ESP_LOGE(TAG, "[FAIL] no IP after %lums", (unsigned long)timeout_ms);
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +168,16 @@ static void do_start_meeting(void)
     if (bsp_display_lock(100)) {
         ui_meeting_set_state(UI_STATE_MEETING);
         bsp_display_unlock();
+    }
+
+    if (!wait_for_ip(30000)) {
+        ESP_LOGE(TAG, "[FAIL] start_meeting: no network");
+        set_state(WS_SESSION_IDLE);
+        if (bsp_display_lock(100)) {
+            ui_meeting_set_state(UI_STATE_IDLE);
+            bsp_display_unlock();
+        }
+        return;
     }
 
     if (api_client_create_session(NULL, s_session_id, sizeof(s_session_id)) != ESP_OK) {
@@ -163,6 +200,7 @@ static void do_start_meeting(void)
     }
 
     set_state(WS_SESSION_MEETING);
+    ws_session_update_ui_status("● Meeting");
 }
 
 static void do_stop_meeting(void)
@@ -217,6 +255,8 @@ static void do_exit_host(void)
     if (transcribe_ws_connect(s_session_id) != ESP_OK) {
         ESP_LOGE(TAG, "[FAIL] exit_host: transcribe WS reconnect failed");
         ws_session_update_ui_status("Connection Error");
+    } else {
+        ws_session_update_ui_status("● Meeting");
     }
 }
 
