@@ -477,20 +477,250 @@ config VAD_SILENCE_MS
 
 ---
 
-## 9. 实现顺序
+## 9. 实现任务、测试用例与验收标准
 
-按"先跑通流程"原则，从 outside-in 建设：
+按"先跑通流程"原则，从 outside-in 建设。每个任务附带测试方法和明确的通过条件。
 
-1. **复制目录 + 清理依赖**（去掉 RTC，改 CMakeLists）
-2. **pipeline_ws.c**（改 player 为写 raw PCM，先 stub 验证硬件 I/O）
-3. **api_client.c**（HTTP create/end session）
-4. **transcribe_ws.c + transcribe_feed_task**（会议模式跑通）
-5. **vad.c**（能量 VAD 单独测试）
-6. **host_ws.c + host_feed_task**（主持人 WS 连接 + 发音频）
-7. **mp3_player.c**（minimp3 + 重采样 + 播放，先用硬编码 MP3 测试）
-8. **ws_session.c**（状态机串联所有模块）
-9. **ui_meeting.c**（加麦克风圆点、文字显示）
-10. **集成测试 + 调整 VAD 参数**
+---
+
+### Task 1 — 复制目录 + 清理依赖
+
+**工作内容：**
+- 复制 `products/rtc_meeting_demo` → `products/ws_meeting_demo`
+- 移除 `components/volc_rtc_engine_lite/` 目录
+- 移除 `server/` 目录
+- 更新 `CMakeLists.txt`：去掉 `volc_rtc_engine_lite` 链接，加入 `esp_websocket_client`
+- 在 `sdkconfig.defaults` 加入 `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y`
+- `main/main.c`：删除 `#include "VolcEngineRTCLite.h"` 及 RTC 版本日志
+
+**测试用例：**
+1. 在 `products/ws_meeting_demo/` 执行 `idf.py set-target esp32s3 && idf.py build`
+2. 确认无 undefined symbol 报错（特别是 `byte_rtc_*` 符号不存在）
+
+**验收标准：**
+- `idf.py build` 零错误完成（允许存在 warning）
+- 生成的 `.bin` 文件存在且大小合理（< 2MB）
+- 串口烧录后设备正常启动，显示屏亮起，日志无 panic
+
+---
+
+### Task 2 — pipeline_ws.c：音频硬件 I/O
+
+**工作内容：**
+- 以 `pipeline_gmf.c` 为基础创建 `pipeline_ws.c`
+- 保留所有硬件初始化代码（I2S、ES8311、ES7210）
+- 将 player 从"接受 Opus 包 → 解码"改为"接受 16kHz 16bit mono PCM → 直接写 I2S"
+- 删除 `esp_opus_dec_*` 相关代码
+- 新增 `pipeline_ws_player_write_pcm(const int16_t *pcm, int frames)`
+
+**测试用例：**
+1. **录音测试**：在 `app_main` 中调用 `pipeline_ws_hw_init()` + `pipeline_ws_recorder_open()`，循环读取 PCM 帧并打印每帧 RMS 值到串口
+   - 静音时 RMS < 200
+   - 对麦克风说话时 RMS > 1000
+2. **播放测试**：调用 `pipeline_ws_player_open()`，循环写入 1kHz 正弦波 PCM（1 秒），从扬声器听到声音
+3. **同时开启测试**：录音和播放同时运行 5 秒，无 assert / panic / I2S 超时
+
+**验收标准：**
+- 静音环境录音 RMS < 200，说话时 RMS > 1000（串口可观测）
+- 扬声器能正常发出 1kHz 测试音，无明显失真或卡顿
+- 录音 + 播放同时运行 5 秒设备不崩溃，日志无 `E (` 级别错误
+
+---
+
+### Task 3 — api_client.c：HTTP 会话管理
+
+**工作内容：**
+- 实现 `api_client_create_session(topic, out_id, len)`：POST `/api/session`，解析 `session_id`
+- 实现 `api_client_end_session(session_id)`：POST `/api/session/{id}/end`
+- 连接超时 10s，失败返回 `ESP_FAIL`
+
+**测试用例：**
+1. **创建会议**：在 WiFi 连接后调用 `api_client_create_session("测试会议", buf, 64)`，打印返回的 `session_id`
+2. **结束会议**：用上一步的 `session_id` 调用 `api_client_end_session()`，打印返回状态
+3. **无网络容错**：WiFi 断开时调用 create_session，函数应在 10s 内返回 `ESP_FAIL`（不 hang 死）
+4. **重复结束**：对已结束的 session 再次调用 end，应返回非成功但不 crash
+
+**验收标准：**
+- `create_session` 返回 `ESP_OK`，`session_id` 格式为 `sess-` 开头的字符串
+- `end_session` 返回 `ESP_OK`，串口日志显示 HTTP 200
+- 无网络时函数在 ≤ 12s 内返回错误码（不阻塞主流程）
+- 无内存泄漏（调用前后 `esp_get_free_heap_size()` 差值 < 512 bytes）
+
+---
+
+### Task 4 — transcribe_ws.c + transcribe_feed_task：会议模式
+
+**工作内容：**
+- 实现 `transcribe_ws_connect(session_id)`：建立 `wss://.../ws/transcribe/{id}` 连接
+- 实现 `transcribe_ws_send_audio(pcm, size)`：base64 编码 + 发送 JSON
+- 实现 `transcribe_ws_send_end()`：发送 `{"type":"end"}`
+- 实现 `transcribe_ws_disconnect()`
+- 实现 `transcribe_feed_task`：持续读取 100ms PCM 帧并发送
+
+**测试用例：**
+1. **连接测试**：调用 `connect()`，串口观察 `WEBSOCKET_EVENT_CONNECTED` 日志
+2. **发送测试**：连接后运行 `transcribe_feed_task` 30 秒，对麦克风正常说话，通过 HTTP `GET /api/session/{id}/transcript` 查询转写记录条数 > 0
+3. **断开测试**：调用 `disconnect()`，WS 正常关闭，task 退出，无内存泄漏
+4. **WS 断线重连**：服务端强制断开（或网络中断 3s 后恢复），30s 内 WS 自动重连，feed_task 恢复发送
+
+**验收标准：**
+- WS 连接建立时间 ≤ 3s（局域网环境）
+- 持续发送 60 秒后，`GET /transcript` 返回 `count > 0`，内容包含真实说话文本
+- `disconnect()` 后 heap 无增长（前后差 < 1KB）
+- `transcribe_feed_task` CPU 占用 ≤ 15%（`vTaskGetRunTimeStats` 可观测）
+
+---
+
+### Task 5 — vad.c：能量 VAD
+
+**工作内容：**
+- 实现 `vad_reset(ctx)` 和 `vad_process_frame(ctx, pcm, frames)`
+- 三状态机：WAITING → SPEECH → SILENCE_AFTER_SPEECH
+- 返回 `VAD_RESULT_CONTINUE` 或 `VAD_RESULT_END_OF_SPEECH`
+
+**测试用例（可用 host 端 C 单元测试或设备端 stub 测试）：**
+1. **静音不触发**：送入 10 秒静音帧（全零 PCM），不应触发 `END_OF_SPEECH`
+2. **噪声过滤**：送入 200ms 高能量帧（模拟短噪声）+ 2 秒静音，不触发（speech_min_ms 过滤）
+3. **正常说话触发**：送入 1 秒高能量帧 + 700ms 静音帧，应触发 `END_OF_SPEECH`
+4. **中断重新检测**：触发后调用 `vad_reset()`，再次重复测试用例 3，再次触发
+5. **设备实测**：在 HOST 模式下说一句话，观察串口日志 `[vad] end_of_speech triggered`
+
+**验收标准：**
+- 用例 1：整个过程无 `END_OF_SPEECH`
+- 用例 2：无 `END_OF_SPEECH`
+- 用例 3：在第 1700ms ± 100ms 触发 `END_OF_SPEECH`
+- 用例 4：重置后再次正常触发
+- 设备实测：说话停止后 600ms ± 150ms 触发，日志可见
+
+---
+
+### Task 6 — host_ws.c + host_feed_task：主持人问答 WS
+
+**工作内容：**
+- 实现 `host_ws_connect(session_id)`：建立 `wss://.../ws/host/{id}` 连接
+- 实现 `host_ws_disconnect()`：发送 `{"type":"stop"}` 后断开
+- 实现 `host_ws_set_callback(cb, ctx)`：注册消息回调
+- 实现 `host_feed_task`：读 PCM → VAD → 发 audio/end_of_speech
+- WS 消息回调处理：`transcription`、`answer_text`、`answer_audio`、`done`、`error`
+
+**测试用例：**
+1. **连接测试**：建立 host WS，串口观察 CONNECTED 事件，10s 内无意外断连
+2. **完整问答流程**：连接后对麦克风提问（说 5 秒），VAD 触发后等待，串口应按顺序看到：
+   - `[host_ws] sent end_of_speech`
+   - `[host_ws] recv transcription: <问题文本>`
+   - `[host_ws] recv answer_text: ...`（多条）
+   - `[host_ws] recv answer_audio`（至少 1 条）
+   - `[host_ws] recv done`
+3. **stop 打断测试**：在回答阶段（收到 answer_audio 之前）发送 `{"type":"stop"}`，服务器应回 `done`，task 正常恢复监听
+4. **重复问答**：完成一轮问答后，不重连，再次说话，成功完成第二轮
+
+**验收标准：**
+- 从 VAD 触发到收到 `transcription` ≤ 3s
+- 从 `end_of_speech` 到收到第一个 `answer_audio` ≤ 5s
+- 两轮完整问答均成功，无 WS 断连
+- `disconnect()` 后 heap 无增长（< 1KB）
+
+---
+
+### Task 7 — mp3_player.c：MP3 流式播放
+
+**工作内容：**
+- 集成 `minimp3.h`
+- 实现 `mp3_player_open/close/enqueue/flush_and_wait/is_busy`
+- `mp3_play_task`：dequeue → minimp3 解码 → 24kHz→16kHz 重采样 → `pipeline_ws_player_write_pcm()`
+- 收到第 1 个 chunk 立刻开始播放（不等后续 chunk）
+- 播放期间 `g_mic_muted = true`，全部播完 + 300ms 后恢复
+
+**测试用例：**
+1. **单 chunk 播放**：将一个真实的 24kHz MP3 文件（约 2s）hardcode 到 flash，调用 `mp3_player_enqueue()` 后扬声器播出，质量可接受（无明显噪声或变调）
+2. **多 chunk 连续播放**：依次 enqueue 3 个 MP3 chunk（间隔 50ms），扬声器连续播放，无明显停顿（chunk 间隔 ≤ 100ms）
+3. **播放结束检测**：所有 chunk 入队后调用 `mp3_player_flush_and_wait()`，函数在所有 chunk 播完后返回
+4. **mute 标志测试**：enqueue 后立即读取 `g_mic_muted`，应为 true；flush_and_wait 返回后 400ms 内，`g_mic_muted` 变为 false（串口打印确认）
+5. **队列满丢弃测试**：连续 enqueue 10 个大 chunk（超过队列上限 8），程序不 crash，log 显示 "queue full, dropping chunk"
+
+**验收标准：**
+- 单 chunk 播放正常，扬声器声音清晰可辨
+- 连续 3 chunk 播放无明显停顿（肉耳感受流畅）
+- `flush_and_wait()` 在播放完成后 ≤ 200ms 内返回
+- `g_mic_muted` 在播放结束 300-500ms 后恢复 false（串口可见日志）
+- 10 chunk 压测后设备无崩溃，heap 无持续增长
+
+---
+
+### Task 8 — ws_session.c：状态机集成
+
+**工作内容：**
+- 实现完整状态机（IDLE / CONNECTING / MEETING / HOST / ERROR）
+- `session_cmd_task`：异步执行阻塞操作
+- `ws_session_update_ui_status()`：通过 `lv_async_call` 线程安全更新 UI
+- 串联 api_client、transcribe_ws、host_ws、mp3_player 的生命周期
+
+**测试用例：**
+1. **完整正向流程**：按顺序操作 Start → (等待) Meeting → Host → (等待) → Exit → Meeting → Stop，每步检查状态机转换日志
+2. **Start 失败回退**：断网后点 Start，10s 内回到 IDLE，UI 显示 "Connection Error"
+3. **MEETING 中断网**：Meeting 状态下断网，transcribe WS 断连，自动重连 1 次；若仍失败，UI 显示错误提示
+4. **快速连击按钮**：在 CONNECTING 状态快速点 Stop，不 crash，最终回到 IDLE
+5. **HOST 中点 Exit**：在 HOST 模式收到 answer_audio 播放中点 Exit，mp3_player 停止，WS 断开，重连 transcribe WS，回到 MEETING
+
+**验收标准：**
+- 正向流程每步状态转换在串口可观察（`[ws_session] state → MEETING` 等）
+- Start 失败后 ≤ 12s 回到 IDLE，UI 有错误提示
+- 快速连击 10 次不 crash，最终状态正确
+- Exit HOST 后 ≤ 3s 回到 MEETING 状态，麦克风圆点重新出现
+
+---
+
+### Task 9 — ui_meeting.c：UI 更新
+
+**工作内容：**
+- 在 MEETING 状态按钮正下方加 12px 绿色麦克风圆点（每 500ms 闪烁）
+- HOST 状态时圆点隐藏
+- status label 在 HOST 模式显示 Q/A 文本（Q: xxx / A: xxx 流式追加）
+- 所有 UI 操作通过 `lv_async_call` 或 `bsp_display_lock` 保护
+
+**测试用例：**
+1. **IDLE 状态**：只显示 "Start Meeting" 按钮，无圆点，无 status
+2. **MEETING 状态**：出现绿色圆点（目视可见闪烁），"Host Mode" 和 "Stop Meeting" 按钮显示
+3. **HOST 状态**：圆点消失，"Exit Host Mode" 按钮显示，status label 显示 "Listening..."
+4. **HOST 收到 transcription**：status label 更新为 `"Q: <问题文本>"`
+5. **HOST 收到 answer_text 流**：文字逐步追加显示（每条 answer_text 追加到 label）
+6. **LVGL watchdog**：以上所有状态切换不触发 LVGL watchdog（超时通常 5s）
+
+**验收标准：**
+- 三种状态 UI 元素与设计描述一致（可截图对比）
+- 麦克风圆点在 MEETING 状态可见闪烁，在其他状态不可见
+- 在 HOST 状态收到服务器文字后，label 内容在 100ms 内更新（肉眼即时响应）
+- 运行 10 分钟无 LVGL panic 或 watchdog 触发
+
+---
+
+### Task 10 — 集成测试 + VAD 参数调优
+
+**工作内容：**
+- 端到端测试完整用户流程
+- 在真实会议环境（多人说话）测试 transcribe 模式
+- 调整 VAD 参数至最佳值
+- 测量关键延迟指标
+
+**测试用例：**
+1. **完整会议→主持人→会议流程**：
+   - Start Meeting → 说话 30 秒 → Host Mode → 提问 → 听回答 → Exit → 继续说话 30 秒 → Stop Meeting
+   - 全程无 crash，无 WS 断连（或自动重连成功）
+2. **VAD 灵敏度测试**：
+   - 安静环境（< 40dB）：说话后静默 600ms 应触发（不误触发）
+   - 有背景音环境（60dB）：说话停止后 ≤ 1s 触发（允许适当调高阈值）
+3. **延迟测量**：
+   - 从 VAD end_of_speech 到收到第一个 `answer_audio`（记录时间戳，目标 ≤ 5s）
+   - 从收到 `answer_audio` 到扬声器开始发声（目标 ≤ 300ms）
+4. **长时间稳定性**：连续运行 Meeting 模式 30 分钟，无 heap 泄漏（每 5 分钟打印 heap 大小，差值 < 4KB），无崩溃
+5. **模式切换压测**：反复 Meeting→Host→Meeting 切换 20 次，无状态错乱或资源泄漏
+
+**验收标准：**
+- 完整流程测试 3 次全部通过，无 crash
+- 安静环境 VAD 误触发率 < 5%（20 次测试中 ≤ 1 次误触发）
+- `answer_audio` 到扬声器发声延迟 ≤ 300ms（串口时间戳可测）
+- 30 分钟运行后 heap 剩余量与启动时差值 < 4KB
+- 20 次模式切换测试全部成功完成
 
 ---
 
