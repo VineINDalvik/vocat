@@ -17,6 +17,7 @@ typedef struct {
     vad_state_t state;
     int speech_frames;
     int silence_frames;
+    int hangover;       // frames remaining before transitioning to silence
 } vad_ctx_t;
 
 typedef enum {

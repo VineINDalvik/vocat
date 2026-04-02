@@ -57,6 +57,11 @@ void host_ws_set_rejected_cb(host_ws_rejected_cb_t cb, void *ctx)
     s_rejected_cb_ctx = ctx;
 }
 
+// After VAD triggers end_of_speech, keep sending audio for FLUSH_FRAMES
+// more frames so the ASR has time to process buffered speech before the
+// server closes the stream.
+#define FLUSH_FRAMES 50   // 50 x 20ms = 1000ms
+
 static void feed_task(void *arg)
 {
     ESP_LOGI(TAG, "[OK] feed task started");
@@ -66,6 +71,7 @@ static void feed_task(void *arg)
     static char          json_buf[JSON_BUF_SIZE];
     vad_ctx_t vad = {0};
     uint32_t audio_frame_count = 0;
+    int flush_remaining = 0;
 
     while (s_feed_run) {
         if (s_session_rejected) {
@@ -74,46 +80,72 @@ static void feed_task(void *arg)
         }
         int got = pipeline_ws_recorder_read(pcm_buf, FRAME_BYTES);
         if (got != FRAME_BYTES) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
-        if (!esp_websocket_client_is_connected(s_ws)) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
 
         if (g_mic_muted) {
             vad_reset(&vad);
+            flush_remaining = 0;
             continue;
         }
 
         vad_result_t result = vad_process_frame(&vad, (const int16_t *)pcm_buf,
                                                   FRAME_BYTES / 2);
 
-        if (s_sending && vad.state == VAD_STATE_SPEECH) {
+        esp_websocket_client_handle_t ws = s_ws;
+        if (!ws || !esp_websocket_client_is_connected(ws)) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        bool should_send = s_sending &&
+            (vad.state == VAD_STATE_SPEECH ||
+             vad.state == VAD_STATE_SILENCE_AFTER_SPEECH ||
+             flush_remaining > 0);
+
+        if (should_send) {
             size_t b64_len = 0;
             mbedtls_base64_encode(b64_buf, sizeof(b64_buf), &b64_len,
                                   pcm_buf, FRAME_BYTES);
             b64_buf[b64_len] = '\0';
             int jlen = snprintf(json_buf, sizeof(json_buf),
                                 "{\"type\":\"audio\",\"data\":\"%s\"}", b64_buf);
-            esp_websocket_client_send_text(s_ws, json_buf, jlen, pdMS_TO_TICKS(100));
+            int ret = esp_websocket_client_send_text(ws, json_buf, jlen, pdMS_TO_TICKS(200));
+            if (ret < 0) {
+                ESP_LOGW(TAG, "WS send audio failed (%d), heap=%lu",
+                         ret, esp_get_free_heap_size());
+                continue;
+            }
             audio_frame_count++;
             if (audio_frame_count % 50 == 0) {
-                ESP_LOGI(TAG, "sending audio frame #%lu", (unsigned long)audio_frame_count);
+                ESP_LOGI(TAG, "sending audio frame #%lu heap=%lu",
+                         (unsigned long)audio_frame_count, esp_get_free_heap_size());
             }
         }
 
-        if (result == VAD_RESULT_END_OF_SPEECH && s_sending) {
-            const char *eos = "{\"type\":\"end_of_speech\"}";
-            esp_websocket_client_send_text(s_ws, eos, (int)strlen(eos), pdMS_TO_TICKS(1000));
-            ESP_LOGI(TAG, "[OK] sent end_of_speech");
-            ESP_LOGI(TAG, "[LATENCY] end_of_speech_sent ts=%lldms",
-                     (long long)(esp_timer_get_time() / 1000));
-            s_sending = false;
+        if (result == VAD_RESULT_END_OF_SPEECH && s_sending && flush_remaining == 0) {
+            flush_remaining = FLUSH_FRAMES;
+            ESP_LOGI(TAG, "VAD end_of_speech — starting %dms flush", FLUSH_FRAMES * 20);
         }
 
-        // Only resume listening after TTS has finished playing (g_mic_muted goes false)
-        // AND the mp3 player has no more pending chunks (closes the race where 'done'
-        // arrives before mp3_task even starts playing the first chunk).
+        if (flush_remaining > 0) {
+            flush_remaining--;
+            if (flush_remaining == 0) {
+                const char *eos = "{\"type\":\"end_of_speech\"}";
+                int ret = esp_websocket_client_send_text(ws, eos, (int)strlen(eos), pdMS_TO_TICKS(1000));
+                if (ret < 0) {
+                    ESP_LOGW(TAG, "WS send end_of_speech failed (%d)", ret);
+                }
+                ESP_LOGI(TAG, "[OK] sent end_of_speech (after flush)");
+                ESP_LOGI(TAG, "[LATENCY] end_of_speech_sent ts=%lldms",
+                         (long long)(esp_timer_get_time() / 1000));
+                s_sending = false;
+            }
+        }
+
         if (s_got_done && !g_mic_muted && !mp3_player_pending()) {
             s_got_done = false;
             s_sending  = true;
             audio_frame_count = 0;
+            flush_remaining = 0;
             vad_reset(&vad);
             ESP_LOGI(TAG, "recv done + TTS finished, resuming VAD");
         }
@@ -268,7 +300,7 @@ esp_err_t host_ws_connect(const char *session_id)
     esp_websocket_client_config_t cfg = {
         .uri                         = uri,
         .buffer_size                 = 131072,  // 128KB: answer_audio JSON (MP3 base64) can exceed 16KB
-        .task_stack                  = 8192,
+        .task_stack                  = 12288,   // 12KB: TLS ops (mbedtls_ssl_read/write) need ~4KB stack
         .task_prio                   = 5,
         .skip_cert_common_name_check = true,
         .network_timeout_ms          = 30000,
@@ -297,7 +329,7 @@ esp_err_t host_ws_connect(const char *session_id)
     s_sending  = true;
     s_got_done = false;
     xTaskCreatePinnedToCoreWithCaps(
-        feed_task, "host_feed", 8 * 1024, NULL, 5,
+        feed_task, "host_feed", 16 * 1024, NULL, 5,
         &s_feed_task_handle, 1,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     return ESP_OK;

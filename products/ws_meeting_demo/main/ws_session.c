@@ -114,14 +114,17 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
                 if (rc == 0 && out_len > 0) {
                     s_answer_chunk_count++;
                     int64_t now_ms = esp_timer_get_time() / 1000;
-                    ESP_LOGI(TAG, "[LATENCY] answer_audio_recv chunk #%lu len=%u ts=%lldms",
+                    ESP_LOGI(TAG, "[LATENCY] answer_audio_recv chunk #%lu len=%u ts=%lldms heap=%lu",
                              (unsigned long)s_answer_chunk_count, (unsigned)out_len,
-                             (long long)now_ms);
+                             (long long)now_ms, esp_get_free_heap_size());
                     mp3_player_enqueue(mp3, out_len);
                 } else {
                     ESP_LOGW(TAG, "base64 decode failed rc=%d out_len=%u", rc, (unsigned)out_len);
                 }
                 free(mp3);
+            } else {
+                ESP_LOGE(TAG, "malloc(%u) failed for answer_audio, heap=%lu",
+                         (unsigned)mp3_max, esp_get_free_heap_size());
             }
         }
 

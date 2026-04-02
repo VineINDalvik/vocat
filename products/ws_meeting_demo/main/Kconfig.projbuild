@@ -16,21 +16,21 @@ menu "WS Meeting Demo Configuration"
 
     config WS_MEETING_TOPIC
         string "Default meeting topic"
-        default "产品评审会"
+        default "clare产品讨论"
 
     config VAD_ENERGY_THRESHOLD
         int "VAD energy threshold (RMS int16)"
-        default 800
+        default 500
         range 200 5000
 
     config VAD_SPEECH_MIN_MS
         int "Minimum speech duration (ms) before silence counts"
-        default 300
+        default 400
         range 100 2000
 
     config VAD_SILENCE_MS
         int "Silence duration (ms) to trigger end_of_speech"
-        default 600
-        range 200 3000
+        default 1200
+        range 200 5000
 
 endmenu

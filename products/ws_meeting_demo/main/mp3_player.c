@@ -245,9 +245,10 @@ esp_err_t mp3_player_enqueue(const uint8_t *mp3, size_t len)
     if (!chunk.data) return ESP_ERR_NO_MEM;
     memcpy(chunk.data, mp3, len);
     chunk.len = len;
-    if (xQueueSend(s_queue, &chunk, pdMS_TO_TICKS(500)) != pdTRUE) {
+    if (xQueueSend(s_queue, &chunk, pdMS_TO_TICKS(100)) != pdTRUE) {
         free(chunk.data);
-        ESP_LOGW(TAG, "queue full after 500ms, dropping chunk len=%u", (unsigned)len);
+        ESP_LOGW(TAG, "queue full after 100ms, dropping chunk len=%u heap=%lu",
+                 (unsigned)len, esp_get_free_heap_size());
         return ESP_ERR_TIMEOUT;
     }
     return ESP_OK;
