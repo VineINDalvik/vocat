@@ -7,36 +7,22 @@ description: "Claude-mem context from past sessions (auto-updated)"
 
 The following context is from claude-mem, a persistent memory system that tracks your coding sessions.
 
-# $CMEM esp-brookesia 2026-04-10 8:36pm GMT+8
+# [esp-brookesia] recent context, 2026-04-29 10:42am GMT+8
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (12,495t read) | 555,910t work | 98% savings
+Stats: 50 obs (12,408t read) | 468,377t work | 97% savings
 
 ### Apr 1, 2026
-S93 Capture and provide client and server logs for a complete host mode session. (Apr 1 at 10:22 PM)
-S94 Flash device and summarize recent code fixes and log path updates. (Apr 1 at 10:26 PM)
 S95 Flash device and summarize root cause analysis and fix for audio playback issues. (Apr 1 at 10:30 PM)
 S96 Summarize root cause analysis and proposed fix for audio playback issues. (Apr 1 at 10:35 PM)
 S97 Analyze and fix TTS audio playback issues, specifically jumbled sequences and nonsensical output. (Apr 1 at 10:42 PM)
 S98 Fix out-of-order TTS playback by addressing early microphone unmuting and race conditions. (Apr 1 at 10:44 PM)
 S351 Check hardware device logs for normal WiFi connectivity. (Apr 1 at 10:51 PM)
 ### Apr 2, 2026
-1243 12:05p ✅ Increased HANGOVER_FRAMES in vad.c
-1244 " ✅ Enhanced VAD logging with RMS values
-1245 12:06p ✅ ESP32-S3 Project Build Successful
-1246 " ✅ ESP32-S3 Firmware Flashed and Reset
-1248 12:10p 🔵 Verify TTS dispatch and completion logs
-1247 " 🔴 Fix TTS audio playback order and stuttering
-1249 " 🔵 Investigate VAD and network connection errors
-1251 12:15p ✅ Add VAD reset call in vad.c
-1250 " 🔴 Implement TTS audio playback drain detection and race condition fix
-1252 12:17p ✅ Implement VAD muting and unmuting logic in host_ws.c
-1253 " ✅ Build project after VAD muting logic implementation
-1254 " ✅ Re-build project after VAD muting logic implementation
-1255 " 🔵 List ESP installation directory
+1255 12:17p 🔵 List ESP installation directory
 1256 12:18p ✅ Successfully built ESP-IDF project after code modifications
 1257 " 🔵 OpenOCD command failed due to invalid command
 1258 " 🔴 Successfully flashed device firmware using corrected OpenOCD command
@@ -77,24 +63,32 @@ S353 Diagnose and fix meeting initiation failure due to TLS handshake issue. (Ap
 3899 " 🔵 API Base URL Configuration Found
 3900 " 🟣 Successful API Endpoint Connection and Response
 3901 8:35p 🟣 Detailed Review of `api_client.c` for Session Management
-S354 Re-diagnose meeting initiation failure after initial TLS hypothesis. (Apr 10 at 8:36 PM)
-**Investigated**: <item>Re-evaluated the `select() timeout` log message, realizing it occurs at the TCP layer, before TLS negotiation.</item>
-    <item>Identified that the device is connected to the `Mayfair-Test-SG` Wi-Fi network with a local IP address (192.168.99.242).</item>
-    <item>Hypothesized that the `Mayfair-Test-SG` network may lack internet connectivity or that the device previously connected to a different, internet-accessible network.</item>
-    <item>Contrasted the device's network status with the successful `curl` test performed from the user's Mac, which is on a different network.</item>
+S354 Re-diagnose meeting initiation failure after initial TLS hypothesis. (Apr 10 at 8:35 PM)
+S442 用户请求将代码提交并推送到远程仓库 (Apr 10 at 8:36 PM)
+### Apr 29, 2026
+4588 10:31a ✅ Updated claude-mem context rule file
+4589 " ✅ Pushed commit to remote Gitee repository
+4590 10:32a 🔵 GitHub CLI not authenticated for Gitee-based repository
+4591 10:35a ✅ Merging feature branches into master
+4592 10:37a 🔵 Branch state relative to master audited
+4593 10:38a 🔵 host-vad-interrupt-optimization is the superset branch
+4594 " 🔵 host-vad-interrupt-optimization subsumes all five branches
+4595 10:39a ✅ Merged host-vad-interrupt-optimization into master
+4596 " ⚖️ Merge aborted to sync with origin/master first
+4597 " 🔵 Gitee remote has no master branch
+4598 10:41a ✅ Gitee master branch created from host-vad-interrupt-optimization
+4599 10:42a ✅ Gitee master confirmed and workspace restored
+S443 Branch audit, merge strategy evaluation, and gitee master creation — user analyzed five gitee feature branches, determined containment, and promoted the superset branch to become gitee's new master. (Apr 29 at 10:42 AM)
+**Investigated**: Examined git log for master and five gitee feature branches (disable-boot-prompts-and-agent, host-vad-interrupt-optimization, latency-logging-analysis, rtc-meeting-demo, test-doubao-realtime). Checked each branch's commit history relative to master, then tested containment relationships between branches to see which subsumed which. Verified gitee remote had no existing master branch. Also attempted a merge into local master before aborting to sync with origin first.
 
-**Learned**: <item>The `select() timeout` observed in the device logs indicates a network connectivity issue at the TCP level, not a TLS certificate validation problem.</item>
-    <item>The device's connection to a specific Wi-Fi network (`Mayfair-Test-SG`) does not guarantee internet access.</item>
-    <item>The problem is likely environmental (network configuration) rather than code-related, as the code itself hasn't changed but the network context has.</item>
+**Learned**: gitee/feat/host-vad-interrupt-optimization (at commit 6ebc8c6) proved to be the superset branch containing every commit from all four other feature branches — zero exclusive commits remained in any other branch. Gitee remote only hosted feature branches with no master branch. Local master was 37 commits behind origin/master, so merging without syncing first would create a suboptimal topology.
 
-**Completed**: <item>Corrected the diagnosis of the meeting initiation failure from a TLS issue to a network connectivity problem.</item>
-    <item>Identified the specific Wi-Fi network the device is connected to.</item>
-    <item>Formulated a hypothesis regarding the lack of internet access on the current network.</item>
+**Completed**: Created temporary branch gitee-master from host-vad-interrupt-optimization, pushed it to gitee as the new master branch (refs/heads/master). Verified gitee master now exists at commit 6ebc8c6. Cleaned up by switching back to feature branch, popping stash (uncommitted change to .cursor/rules/claude-mem-context.mdc), and deleting the temporary local branch.
 
-**Next Steps**: Verify internet connectivity from the `Mayfair-Test-SG` network by attempting to access the API endpoint (`https://ailabs.mayfair-inc.net/voice-api/api/session`) using a device connected to the same network.
+**Next Steps**: User is likely to sync local master with origin/master (pull the 37 behind commits), then merge gitee/feat/host-vad-interrupt-optimization into the updated local master and push to origin/master, or potentially perform a PR-based merge. The uncommitted claude-mem-context.mdc change on the feature branch may also need to be addressed.
 
 
-Access 556k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 468k tokens of past work via get_observations([IDs]) or mem-search skill.
 
 ---
 *Updated after last session. Use claude-mem's MCP search tools for more detailed queries.*
