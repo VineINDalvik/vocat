@@ -62,7 +62,7 @@ static esp_err_t init_touch_button(void)
             .channel_threshold = 0.05, // Touch threshold (adjust as needed)
             .skip_lowlevel_init = true,
         };
-        ESP_LOGI(TAG, "Touch button %d channel: %d", i + 1, touch_channel_list[i]);
+        ESP_LOGI(TAG, "Touch button %d channel: %lu", i + 1, (unsigned long)touch_channel_list[i]);
         // Create first touch button device
         ret = iot_button_new_touch_button_device(&btn_cfg, &touch_cfg_1, &touch_btn_handle[i]);
         if (ret != ESP_OK) {

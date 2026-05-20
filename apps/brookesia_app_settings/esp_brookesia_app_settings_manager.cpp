@@ -2366,11 +2366,18 @@ bool SettingsManager::doWlanOperationInit()
         ESP_UTILS_CHECK_ERROR_RETURN(error, false, "Create default event loop failed");
     }
 
-    _wlan_sta_netif = esp_netif_create_default_wifi_sta();
-    ESP_UTILS_CHECK_NULL_RETURN(_wlan_sta_netif, false, "Create default STA netif failed");
+    _wlan_sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (!_wlan_sta_netif) {
+        _wlan_sta_netif = esp_netif_create_default_wifi_sta();
+        ESP_UTILS_CHECK_NULL_RETURN(_wlan_sta_netif, false, "Create default STA netif failed");
+    }
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_UTILS_CHECK_ERROR_RETURN(esp_wifi_init(&cfg), false, "Initialize WLAN failed");
+    wifi_mode_t cur_mode = WIFI_MODE_NULL;
+    esp_wifi_get_mode(&cur_mode);
+    if (cur_mode == WIFI_MODE_NULL) {
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_UTILS_CHECK_ERROR_RETURN(esp_wifi_init(&cfg), false, "Initialize WLAN failed");
+    }
 
     ESP_UTILS_CHECK_ERROR_RETURN(
         esp_event_handler_instance_register(

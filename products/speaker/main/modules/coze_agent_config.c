@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <ctype.h>
+#include <string.h>
 #include "esp_partition.h"
 #include "esp_check.h"
 #include "mbedtls/aes.h"

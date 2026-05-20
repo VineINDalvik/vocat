@@ -23,6 +23,9 @@ esp_err_t host_ws_connect(const char *session_id);
 // Send {"type":"stop"}, stop feed task, close recorder, disconnect WS
 esp_err_t host_ws_disconnect(void);
 
+// Force VAD to resume listening (used after server error when no "done" arrives)
+void host_ws_force_resume(void);
+
 #ifdef __cplusplus
 }
 #endif

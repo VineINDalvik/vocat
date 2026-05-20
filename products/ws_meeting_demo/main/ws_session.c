@@ -70,6 +70,23 @@ void ws_session_update_ui_status(const char *text)
     lv_async_call(do_ui_update, u);
 }
 
+// Thread-safe UI action text update (for function calling status)
+static void do_ui_action_update(void *param)
+{
+    ui_update_t *u = (ui_update_t *)param;
+    ui_meeting_set_action_text(u->text);
+    ESP_LOGI(TAG, "ui action: \"%.40s\"", u->text);
+    free(u);
+}
+
+void ws_session_update_ui_action(const char *text)
+{
+    ui_update_t *u = malloc(sizeof(ui_update_t));
+    if (!u) return;
+    strlcpy(u->text, text, sizeof(u->text));
+    lv_async_call(do_ui_action_update, u);
+}
+
 // ---------------------------------------------------------------------------
 // Host WS message callback
 // ---------------------------------------------------------------------------
@@ -128,6 +145,38 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
             }
         }
 
+    } else if (strcmp(type, "function_call") == 0) {
+        cJSON *name_j = cJSON_GetObjectItemCaseSensitive(root, "name");
+        cJSON *args_j = cJSON_GetObjectItemCaseSensitive(root, "arguments");
+        if (cJSON_IsString(name_j) && name_j->valuestring) {
+            char *args_str = args_j ? cJSON_PrintUnformatted(args_j) : NULL;
+            ESP_LOGI(TAG, "function_call: name=\"%s\" args=%s",
+                     name_j->valuestring, args_str ? args_str : "(null)");
+            if (args_str) cJSON_free(args_str);
+            char buf[256];
+            snprintf(buf, sizeof(buf), "%s...", name_j->valuestring);
+            ws_session_update_ui_action(buf);
+        }
+
+    } else if (strcmp(type, "function_result") == 0) {
+        cJSON *name_j    = cJSON_GetObjectItemCaseSensitive(root, "name");
+        cJSON *success_j = cJSON_GetObjectItemCaseSensitive(root, "success");
+        cJSON *msg_j     = cJSON_GetObjectItemCaseSensitive(root, "message");
+        const char *fname = (cJSON_IsString(name_j) && name_j->valuestring)
+                            ? name_j->valuestring : "?";
+        bool success = cJSON_IsTrue(success_j);
+        const char *msg = (cJSON_IsString(msg_j) && msg_j->valuestring)
+                          ? msg_j->valuestring : "";
+        ESP_LOGI(TAG, "function_result: name=\"%s\" success=%s message=\"%s\"",
+                 fname, success ? "true" : "false", msg);
+        char buf[256];
+        if (success) {
+            snprintf(buf, sizeof(buf), "OK %s", msg);
+        } else {
+            snprintf(buf, sizeof(buf), "Error: %s", msg);
+        }
+        ws_session_update_ui_action(buf);
+
     } else if (strcmp(type, "error") == 0) {
         cJSON *msg = cJSON_GetObjectItemCaseSensitive(root, "message");
         if (cJSON_IsString(msg) && msg->valuestring) {
@@ -135,6 +184,8 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
             snprintf(buf, sizeof(buf), "Error: %s", msg->valuestring);
             ws_session_update_ui_status(buf);
         }
+        // Force VAD resume so s_sending doesn't stay false forever
+        host_ws_force_resume();
     } else if (strcmp(type, "done") == 0) {
         s_answer_chunk_count = 0;
         s_first_answer_text_logged = false;
@@ -211,7 +262,7 @@ static void do_start_meeting(void)
     }
 
     set_state(WS_SESSION_MEETING);
-    ws_session_update_ui_status("● Meeting");
+    ws_session_update_ui_status("[Meeting]");
 }
 
 static void do_stop_meeting(void)
@@ -244,15 +295,18 @@ static void on_host_session_rejected(void *ctx)
 static void do_enter_host(void)
 {
     ESP_LOGI(TAG, "state → HOST (entering host mode)");
+    ws_session_update_ui_status("Connecting...");
+
+    // Disconnect transcribe first — it owns the recorder (singleton).
+    // Must stop its feed task and close recorder before host can open it.
     transcribe_ws_disconnect();
 
     host_ws_set_rejected_cb(on_host_session_rejected, NULL);
     host_ws_set_callback(on_host_msg, NULL);
     if (host_ws_connect(s_session_id) != ESP_OK) {
         ESP_LOGE(TAG, "[FAIL] enter_host: WS connect failed");
-        // Reconnect transcribe WS and stay in MEETING
         transcribe_ws_connect(s_session_id);
-        set_state(WS_SESSION_MEETING);
+        ws_session_update_ui_status("[Meeting]");
         return;
     }
 
@@ -267,6 +321,7 @@ static void do_enter_host(void)
 static void do_recreate_session_host(void)
 {
     ESP_LOGI(TAG, "session rejected — ending old session and creating new one");
+    host_ws_disconnect();  // clean up the rejected WS client before reconnecting
     api_client_end_session(s_session_id);
     memset(s_session_id, 0, sizeof(s_session_id));
 
@@ -297,7 +352,7 @@ static void do_exit_host(void)
         ESP_LOGE(TAG, "[FAIL] exit_host: transcribe WS reconnect failed");
         ws_session_update_ui_status("Connection Error");
     } else {
-        ws_session_update_ui_status("● Meeting");
+        ws_session_update_ui_status("[Meeting]");
     }
 }
 

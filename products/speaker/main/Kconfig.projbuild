@@ -16,6 +16,34 @@ menu "Example Configuration"
             connect to the server on boot.
             When disabled, the agent must be started manually.
 
+    menu "Default WiFi Profiles"
+        help
+            Configure WiFi networks for auto-connect on boot.
+            Networks are tried in order (AP1 first, then AP2, etc.).
+            Leave SSID empty to skip a profile.
+
+        config SPEAKER_WIFI_AP1_SSID
+            string "AP1 SSID"
+            default ""
+        config SPEAKER_WIFI_AP1_PASSWORD
+            string "AP1 Password"
+            default ""
+
+        config SPEAKER_WIFI_AP2_SSID
+            string "AP2 SSID"
+            default ""
+        config SPEAKER_WIFI_AP2_PASSWORD
+            string "AP2 Password"
+            default ""
+
+        config SPEAKER_WIFI_AP3_SSID
+            string "AP3 SSID"
+            default ""
+        config SPEAKER_WIFI_AP3_PASSWORD
+            string "AP3 Password"
+            default ""
+    endmenu
+
     config SPEAKER_WAKE_WORD_ENABLE
         bool "Enable wake word detection and touch button wake-up"
         default n

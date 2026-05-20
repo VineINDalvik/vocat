@@ -27,6 +27,7 @@ esp_err_t ws_session_exit_host(void);
 
 // Thread-safe UI text update (lv_async_call internally)
 void ws_session_update_ui_status(const char *text);
+void ws_session_update_ui_action(const char *text);
 
 ws_session_state_t ws_session_get_state(void);
 

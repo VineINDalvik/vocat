@@ -12,7 +12,7 @@ menu "WS Meeting Demo Configuration"
 
     config WS_MEETING_API_BASE_URL
         string "ClarityX Voice API base URL"
-        default "https://ailabs.mayfair-inc.net/voice-api"
+        default "https://clare.vinex.top/voice-api"
 
     config WS_MEETING_TOPIC
         string "Default meeting topic"

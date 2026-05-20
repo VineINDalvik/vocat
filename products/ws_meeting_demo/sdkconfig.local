@@ -1,6 +1,9 @@
-# WiFi credentials
+# WiFi credentials — primary network (fallbacks hardcoded in wifi_init.c)
 CONFIG_MEETING_WIFI_SSID="Mayfair-Test-SG"
-CONFIG_MEETING_WIFI_PASSWORD="Mayfair2025"
+CONFIG_MEETING_WIFI_PASSWORD="Mayfair2019"
+
+# Public Voice API
+CONFIG_WS_MEETING_API_BASE_URL="https://clare.vinex.top/voice-api"
 
 # Business server (ip:port, no scheme, e.g. 192.168.1.100:8080)
 CONFIG_AIGENT_SERVER_HOST="192.168.98.102:8080"

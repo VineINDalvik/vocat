@@ -29,7 +29,7 @@ static int compute_rms(const int16_t *pcm, int frames)
 void vad_reset(vad_ctx_t *ctx)
 {
     memset(ctx, 0, sizeof(*ctx));
-    ESP_LOGI(TAG, "reset");
+    ESP_LOGD(TAG, "reset");
 }
 
 vad_result_t vad_process_frame(vad_ctx_t *ctx, const int16_t *pcm, int frames)

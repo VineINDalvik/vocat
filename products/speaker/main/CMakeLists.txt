@@ -13,6 +13,7 @@ idf_component_register(
 )
 
 target_compile_options(${COMPONENT_LIB} PUBLIC -Wno-missing-field-initializers)
+target_link_libraries(${COMPONENT_LIB} PUBLIC "-u __atomic_test_and_set")
 
 spiffs_create_partition_image(spiffs_data ../spiffs FLASH_IN_PROJECT)
 

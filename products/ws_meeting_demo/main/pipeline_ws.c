@@ -50,7 +50,7 @@ static const char *TAG = "pipeline_ws";
 // Playback ring buffer: 3000ms of 16kHz 16bit mono PCM = 96000 bytes
 // ---------------------------------------------------------------------------
 #define PLAY_RB_SIZE        (96000)
-#define PLAY_PRE_ROLL_BYTES (9600)    // 300ms pre-roll at 16kHz 16bit mono
+#define PLAY_PRE_ROLL_BYTES (3200)    // 100ms pre-roll at 16kHz 16bit mono
 #define PLAY_TASK_STACK     (8 * 1024)
 #define PLAY_TASK_PRIORITY  (7)
 #define PLAY_TASK_CORE      (0)
@@ -270,6 +270,7 @@ int pipeline_ws_recorder_read(void *buf, size_t size)
 
 esp_err_t pipeline_ws_recorder_close(void)
 {
+    if (!s_rec_open) return ESP_OK;
     s_rec_open = false;
     if (s_rec_raw_buf) { heap_caps_free(s_rec_raw_buf); s_rec_raw_buf = NULL; }
     ESP_LOGI(TAG, "[OK] recorder closed");

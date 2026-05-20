@@ -27,6 +27,7 @@
 #include "imu_gesture.h"
 #include "touch_sensor.h"
 #include "led_indicator.h"
+#include "wifi_auto_connect.h"
 
 constexpr const char *FUNCTION_OPEN_APP_THREAD_NAME               = "open_app";
 constexpr int         FUNCTION_OPEN_APP_THREAD_STACK_SIZE         = 20 * 1024;
@@ -93,6 +94,11 @@ bool system_init()
     ESP_UTILS_CHECK_FALSE_RETURN(imu_gesture.init(), false, "IMU gesture init failed");
     ESP_UTILS_CHECK_FALSE_RETURN(touch_sensor.init(), false, "Touch sensor init failed");
     ESP_UTILS_CHECK_FALSE_RETURN(check_whether_enter_developer_mode(), false, "Check whether enter developer mode failed");
+
+    /* Auto-connect WiFi if Kconfig SSID is set */
+    if (wifi_auto_connect() != ESP_OK) {
+        ESP_UTILS_LOGW("WiFi auto-connect failed, continue without WiFi");
+    }
 
     /* Load coze agent config */
     if (!load_coze_agent_config()) {

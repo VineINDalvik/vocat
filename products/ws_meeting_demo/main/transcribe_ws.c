@@ -44,7 +44,8 @@ static void feed_task(void *arg)
     while (s_feed_run) {
         int got = pipeline_ws_recorder_read(pcm_buf, FEED_FRAME_BYTES);
         if (got != FEED_FRAME_BYTES) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
-        if (!esp_websocket_client_is_connected(s_ws)) {
+        esp_websocket_client_handle_t ws = s_ws;
+        if (!ws || !esp_websocket_client_is_connected(ws)) {
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
@@ -56,7 +57,7 @@ static void feed_task(void *arg)
 
         int jlen = snprintf(json_buf, sizeof(json_buf),
                             "{\"type\":\"audio\",\"data\":\"%s\"}", b64_buf);
-        esp_websocket_client_send_text(s_ws, json_buf, jlen, pdMS_TO_TICKS(500));
+        esp_websocket_client_send_text(ws, json_buf, jlen, pdMS_TO_TICKS(500));
 
         frame_count++;
         if (frame_count % 100 == 0) {
@@ -141,15 +142,17 @@ esp_err_t transcribe_ws_send_end(void)
 esp_err_t transcribe_ws_disconnect(void)
 {
     s_feed_run = false;
+    // Null out s_ws so feed_task won't use a destroyed handle
+    esp_websocket_client_handle_t ws = s_ws;
+    s_ws = NULL;
     // Wait for feed task to exit (up to 3s)
     for (int i = 0; i < 30 && s_feed_task_handle != NULL; i++) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
     pipeline_ws_recorder_close();
-    if (s_ws) {
-        esp_websocket_client_stop(s_ws);
-        esp_websocket_client_destroy(s_ws);
-        s_ws = NULL;
+    if (ws) {
+        esp_websocket_client_stop(ws);
+        esp_websocket_client_destroy(ws);
     }
     ESP_LOGI(TAG, "[OK] disconnected");
     return ESP_OK;

@@ -36,6 +36,7 @@ static volatile bool                 s_sending         = false;
 static volatile bool          s_session_rejected  = false;
 static host_ws_rejected_cb_t  s_rejected_cb       = NULL;
 static void                  *s_rejected_cb_ctx   = NULL;
+static esp_websocket_client_handle_t s_rejected_ws = NULL;  // stashed by feed_task for disconnect to clean up
 
 void host_ws_set_callback(host_ws_msg_cb_t cb, void *ctx)
 {
@@ -60,7 +61,9 @@ void host_ws_set_rejected_cb(host_ws_rejected_cb_t cb, void *ctx)
 // After VAD triggers end_of_speech, keep sending audio for FLUSH_FRAMES
 // more frames so the ASR has time to process buffered speech before the
 // server closes the stream.
-#define FLUSH_FRAMES 50   // 50 x 20ms = 1000ms
+#define FLUSH_FRAMES 15   // 15 x 20ms = 300ms
+#define COOLDOWN_FRAMES 50  // 50 x 20ms = 1000ms after TTS ends, skip VAD to avoid echo/noise re-trigger
+#define MIN_AUDIO_FRAMES_FOR_EOS 25  // suppress end_of_speech if less than 500ms audio sent (noise guard)
 
 static void feed_task(void *arg)
 {
@@ -72,6 +75,8 @@ static void feed_task(void *arg)
     vad_ctx_t vad = {0};
     uint32_t audio_frame_count = 0;
     int flush_remaining = 0;
+    int cooldown_remaining = 0;
+    bool prev_mic_muted = false;
 
     while (s_feed_run) {
         if (s_session_rejected) {
@@ -81,9 +86,27 @@ static void feed_task(void *arg)
         int got = pipeline_ws_recorder_read(pcm_buf, FRAME_BYTES);
         if (got != FRAME_BYTES) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
 
+        // Detect g_mic_muted edges
+        bool mic_just_muted   = !prev_mic_muted && g_mic_muted;   // rising edge: TTS started
+        bool mic_just_unmuted = prev_mic_muted && !g_mic_muted;   // falling edge: TTS ended
+
+        if (mic_just_unmuted && cooldown_remaining == 0) {
+            cooldown_remaining = COOLDOWN_FRAMES;
+            ESP_LOGI(TAG, "TTS ended, starting %dms cooldown", COOLDOWN_FRAMES * 20);
+        }
+        prev_mic_muted = g_mic_muted;
+
         if (g_mic_muted) {
-            vad_reset(&vad);
-            flush_remaining = 0;
+            if (mic_just_muted) {
+                vad_reset(&vad);
+                flush_remaining = 0;
+            }
+            continue;
+        }
+
+        // Cooldown: skip VAD processing to avoid echo/noise re-trigger after TTS
+        if (cooldown_remaining > 0) {
+            cooldown_remaining--;
             continue;
         }
 
@@ -122,8 +145,16 @@ static void feed_task(void *arg)
         }
 
         if (result == VAD_RESULT_END_OF_SPEECH && s_sending && flush_remaining == 0) {
-            flush_remaining = FLUSH_FRAMES;
-            ESP_LOGI(TAG, "VAD end_of_speech — starting %dms flush", FLUSH_FRAMES * 20);
+            // Noise guard: suppress end_of_speech if too few audio frames sent
+            if (audio_frame_count < MIN_AUDIO_FRAMES_FOR_EOS) {
+                ESP_LOGI(TAG, "VAD end_of_speech suppressed (only %lu frames < %d, likely noise)",
+                         (unsigned long)audio_frame_count, MIN_AUDIO_FRAMES_FOR_EOS);
+                vad_reset(&vad);
+                audio_frame_count = 0;
+            } else {
+                flush_remaining = FLUSH_FRAMES;
+                ESP_LOGI(TAG, "VAD end_of_speech — starting %dms flush", FLUSH_FRAMES * 20);
+            }
         }
 
         if (flush_remaining > 0) {
@@ -134,10 +165,12 @@ static void feed_task(void *arg)
                 if (ret < 0) {
                     ESP_LOGW(TAG, "WS send end_of_speech failed (%d)", ret);
                 }
-                ESP_LOGI(TAG, "[OK] sent end_of_speech (after flush)");
+                ESP_LOGI(TAG, "[OK] sent end_of_speech (after flush, %lu audio frames)",
+                         (unsigned long)audio_frame_count);
                 ESP_LOGI(TAG, "[LATENCY] end_of_speech_sent ts=%lldms",
                          (long long)(esp_timer_get_time() / 1000));
                 s_sending = false;
+                vad_reset(&vad);  // clear poison state: VAD was returning END_OF_SPEECH every frame
             }
         }
 
@@ -146,17 +179,20 @@ static void feed_task(void *arg)
             s_sending  = true;
             audio_frame_count = 0;
             flush_remaining = 0;
+            cooldown_remaining = COOLDOWN_FRAMES;  // prevent noise/echo re-trigger
             vad_reset(&vad);
-            ESP_LOGI(TAG, "recv done + TTS finished, resuming VAD");
+            ESP_LOGI(TAG, "recv done + TTS finished, resuming VAD (with %dms cooldown)",
+                     COOLDOWN_FRAMES * 20);
         }
     }
 
-    // If rejected by server (403), safely stop+destroy WS client from this task
-    // (cannot call esp_websocket_client_stop from within the WS event handler).
-    if (s_session_rejected && s_ws) {
-        esp_websocket_client_stop(s_ws);
-        esp_websocket_client_destroy(s_ws);
+    // If rejected by server (403), save WS handle so disconnect can stop/destroy it.
+    // feed_task must NOT call stop/destroy itself (race with WS internal task).
+    esp_websocket_client_handle_t rejected_ws = NULL;
+    if (s_session_rejected) {
+        rejected_ws = s_ws;   // capture before nulling
         s_ws = NULL;
+        s_rejected_ws = rejected_ws;  // stash for host_ws_disconnect
     }
     pipeline_ws_recorder_close();
     s_feed_task_handle = NULL;
@@ -338,21 +374,33 @@ esp_err_t host_ws_connect(const char *session_id)
 esp_err_t host_ws_disconnect(void)
 {
     s_feed_run = false;
+    // Null out s_ws so feed_task won't use a destroyed handle
+    esp_websocket_client_handle_t ws = s_ws;
+    s_ws = NULL;
     for (int i = 0; i < 30 && s_feed_task_handle != NULL; i++) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
-    pipeline_ws_recorder_close();
+    // feed_task already closes the recorder on exit, no need here
 
-    if (s_ws) {
-        if (esp_websocket_client_is_connected(s_ws)) {
+    // Clean up the WS client (either from this disconnect or stashed by feed_task on rejection)
+    if (!ws) ws = s_rejected_ws;
+    s_rejected_ws = NULL;
+
+    if (ws) {
+        if (esp_websocket_client_is_connected(ws)) {
             const char *stop = "{\"type\":\"stop\"}";
-            esp_websocket_client_send_text(s_ws, stop, (int)strlen(stop), pdMS_TO_TICKS(1000));
+            esp_websocket_client_send_text(ws, stop, (int)strlen(stop), pdMS_TO_TICKS(1000));
             ESP_LOGI(TAG, "[OK] sent stop");
         }
-        esp_websocket_client_stop(s_ws);
-        esp_websocket_client_destroy(s_ws);
-        s_ws = NULL;
+        esp_websocket_client_stop(ws);
+        esp_websocket_client_destroy(ws);
     }
     ESP_LOGI(TAG, "[OK] disconnected, heap_free=%lu", esp_get_free_heap_size());
     return ESP_OK;
+}
+
+void host_ws_force_resume(void)
+{
+    s_got_done = true;   // triggers the recovery path in feed_task
+    ESP_LOGI(TAG, "force resume: s_got_done set to true");
 }
