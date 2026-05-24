@@ -66,7 +66,7 @@ void host_ws_set_rejected_cb(host_ws_rejected_cb_t cb, void *ctx)
 // server closes the stream.
 #define FLUSH_FRAMES 15   // 15 x 20ms = 300ms
 #define COOLDOWN_FRAMES 50  // 50 x 20ms = 1000ms after TTS ends, skip VAD to avoid echo/noise re-trigger
-#define MIN_AUDIO_FRAMES_FOR_EOS 25  // suppress end_of_speech if less than 500ms audio sent (noise guard)
+#define MIN_AUDIO_FRAMES_FOR_EOS 40  // suppress end_of_speech if less than 800ms audio sent (noise guard)
 
 static void feed_task(void *arg)
 {
