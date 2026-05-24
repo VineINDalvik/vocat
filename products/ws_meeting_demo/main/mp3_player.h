@@ -17,6 +17,7 @@ esp_err_t mp3_player_flush_and_wait(void);
 esp_err_t mp3_player_close(void);
 bool      mp3_player_is_busy(void);
 bool      mp3_player_pending(void);
+void      mp3_player_stop(void);
 
 #ifdef __cplusplus
 }

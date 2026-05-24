@@ -37,6 +37,7 @@ static lv_obj_t *s_btn_start    = NULL;
 static lv_obj_t *s_btn_host     = NULL;
 static lv_obj_t *s_btn_stop     = NULL;
 static lv_obj_t *s_btn_exit     = NULL;
+static lv_obj_t *s_btn_interrupt = NULL;
 static lv_obj_t *s_btn_wifi    = NULL;
 static lv_obj_t *s_mic_dot      = NULL;
 
@@ -65,6 +66,7 @@ static void btn_start_cb(lv_event_t *e);
 static void btn_host_cb(lv_event_t *e);
 static void btn_stop_cb(lv_event_t *e);
 static void btn_exit_cb(lv_event_t *e);
+static void btn_interrupt_cb(lv_event_t *e);
 static void btn_wifi_cb(lv_event_t *e);
 static void wifi_save_cb_internal(lv_event_t *e);
 static void wifi_back_cb_internal(lv_event_t *e);
@@ -277,7 +279,14 @@ static void wifi_ap_selected_cb(lv_event_t *e)
     lv_label_set_text(s_wifi_ssid_label, label);
     lv_obj_clear_flag(s_wifi_ssid_label, LV_OBJ_FLAG_HIDDEN);
 
-    lv_textarea_set_text(s_wifi_ta_pass, "");
+    // Pre-fill saved password if this SSID was previously saved
+    char saved_pass[65] = {0};
+    if (wifi_load_credentials(s_selected_ssid, sizeof(s_selected_ssid), saved_pass, sizeof(saved_pass)) == ESP_OK) {
+        lv_textarea_set_text(s_wifi_ta_pass, saved_pass);
+        ESP_LOGI(TAG, "pre-filled saved password for \"%s\"", s_selected_ssid);
+    } else {
+        lv_textarea_set_text(s_wifi_ta_pass, "");
+    }
     lv_obj_clear_flag(s_wifi_ta_pass, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_wifi_btn_show, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_wifi_btn_save, LV_OBJ_FLAG_HIDDEN);
@@ -356,9 +365,13 @@ void ui_meeting_create(void)
                              two_btn_x + BTN_W_HALF + BTN_GAP, BTN_Y,
                              BTN_W_HALF, BTN_H, btn_stop_cb);
 
-    // ---- HOST: [Exit Host Mode] ----
+    // ---- HOST: [Interrupt] (top) [Exit Host Mode] (bottom) ---- stacked vertically for round screen
+    s_btn_interrupt = make_button(screen, "Interrupt",
+                                   (SCREEN_W - BTN_W_WIDE) / 2, BTN_Y,
+                                   BTN_W_WIDE, BTN_H, btn_interrupt_cb);
+
     s_btn_exit = make_button(screen, "Exit Host Mode",
-                             (SCREEN_W - BTN_W_WIDE) / 2, BTN_Y,
+                             (SCREEN_W - BTN_W_WIDE) / 2, BTN_Y + BTN_H + BTN_GAP,
                              BTN_W_WIDE, BTN_H, btn_exit_cb);
 
     // ---- WiFi settings: AP list ----
@@ -452,6 +465,7 @@ static void apply_state(ui_state_t state)
     lv_obj_add_flag(s_btn_host,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_btn_stop,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_btn_exit,   LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_btn_interrupt, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_btn_wifi,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_action_label, LV_OBJ_FLAG_HIDDEN);
@@ -476,6 +490,7 @@ static void apply_state(ui_state_t state)
 
     case UI_STATE_HOST:
         lv_label_set_text(s_title_label, "Host Mode");
+        lv_obj_clear_flag(s_btn_interrupt, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_btn_exit,   LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
         break;
@@ -562,6 +577,11 @@ static void btn_exit_cb(lv_event_t *e)
     lv_label_set_text(s_status_label, "Reconnecting...");
     lv_obj_clear_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
     ws_session_exit_host();
+}
+
+static void btn_interrupt_cb(lv_event_t *e)
+{
+    ws_session_interrupt();
 }
 
 static void btn_wifi_cb(lv_event_t *e)

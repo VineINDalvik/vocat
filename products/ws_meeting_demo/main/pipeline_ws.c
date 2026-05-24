@@ -77,6 +77,7 @@ static volatile bool             s_play_task_run   = false;
 static SemaphoreHandle_t         s_play_done_sem   = NULL;
 static volatile size_t           s_pre_roll_written = 0; // bytes written since last open/underrun
 static volatile bool             s_play_drained     = false; // true when ring buffer has emptied
+static volatile bool             s_player_reset     = false; // signal player_task to drain ring buffer and reset
 
 // ---------------------------------------------------------------------------
 // Sample format helpers
@@ -290,6 +291,25 @@ static void player_task(void *arg)
 
     while (s_play_task_run) {
 
+        /* ── Reset flag: drain ring buffer and go back to pre-roll state ── */
+        if (s_player_reset) {
+            s_player_reset = false;
+            playing = false;
+            acc_frames = 0;
+            empty_runs = 0;
+            s_pre_roll_written = 0;
+            s_play_drained = true;
+            size_t drain_size;
+            uint8_t *drain_item;
+            while ((drain_item = (uint8_t *)xRingbufferReceiveUpTo(
+                    s_play_rb, &drain_size, pdMS_TO_TICKS(0), PLAY_RB_SIZE)) != NULL) {
+                vRingbufferReturnItem(s_play_rb, drain_item);
+            }
+            memset(out_buf, 0, sizeof(out_buf));
+            esp_codec_dev_write(s_play_dev, out_buf, sizeof(out_buf));
+            continue;
+        }
+
         /* ── Pre-roll gate ─────────────────────────────────────────── */
         if (!playing) {
             if (s_pre_roll_written >= PLAY_PRE_ROLL_BYTES) {
@@ -419,6 +439,14 @@ esp_err_t pipeline_ws_player_close(void)
     if (s_play_rb) { vRingbufferDelete(s_play_rb); s_play_rb = NULL; }
     s_play_open = false;
     ESP_LOGI(TAG, "[OK] player closed");
+    return ESP_OK;
+}
+
+esp_err_t pipeline_ws_player_reset(void)
+{
+    if (!s_play_open || !s_play_rb) return ESP_ERR_INVALID_STATE;
+    s_player_reset = true;
+    ESP_LOGI(TAG, "[OK] player reset requested");
     return ESP_OK;
 }
 

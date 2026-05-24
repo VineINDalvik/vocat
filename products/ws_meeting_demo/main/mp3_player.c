@@ -19,7 +19,7 @@
 
 static const char *TAG = "mp3_player";
 
-#define QUEUE_DEPTH  32
+#define QUEUE_DEPTH  64
 
 typedef struct {
     uint8_t *data;
@@ -30,6 +30,8 @@ static QueueHandle_t     s_queue    = NULL;
 static TaskHandle_t      s_task     = NULL;
 static volatile bool     s_task_run = false;
 static volatile bool     s_busy     = false;
+static volatile bool     s_interrupt_flag = false;
+static volatile bool     s_discontinuity  = false;  // set when enqueue drops a chunk — decoder must reset
 static SemaphoreHandle_t s_done_sem = NULL;
 
 #define DECODE_BUF_SIZE (16 * 1024)
@@ -81,6 +83,18 @@ static void mp3_play_task(void *arg)
     size_t   decode_buf_len = 0; // unconsumed bytes carried across chunks
 
     while (s_task_run) {
+        /* ── Reset state after interrupt (before receiving next chunk) ── */
+        if (s_interrupt_flag) {
+            s_interrupt_flag = false;
+            chunk_count = 0;
+            prev_had_audio = false;
+            decode_buf_len = 0;
+            mp3dec_init(&mp3d);
+            s_busy = false;
+            g_mic_muted = false;
+            ESP_LOGI(TAG, "state reset after interrupt — decoder fresh");
+        }
+
         mp3_chunk_t chunk;
         if (xQueueReceive(s_queue, &chunk, pdMS_TO_TICKS(100)) != pdTRUE) continue;
 
@@ -113,6 +127,18 @@ static void mp3_play_task(void *arg)
         /* Detect sentence boundary by ID3v2 tag */
         bool is_new_sentence = (chunk.len >= 3 &&
             chunk.data[0] == 'I' && chunk.data[1] == 'D' && chunk.data[2] == '3');
+
+        /* After dropped chunks, decoder state is stale — skip non-sentence chunks until resync */
+        if (s_discontinuity) {
+            if (is_new_sentence) {
+                s_discontinuity = false;
+                ESP_LOGI(TAG, "decoder resync after discontinuity — at sentence boundary");
+                // mp3dec_init + decode_buf_len=0 handled by is_new_sentence block below
+            } else {
+                free(chunk.data);
+                continue;
+            }
+        }
 
         if (is_new_sentence) {
             mp3dec_init(&mp3d);
@@ -245,9 +271,10 @@ esp_err_t mp3_player_enqueue(const uint8_t *mp3, size_t len)
     if (!chunk.data) return ESP_ERR_NO_MEM;
     memcpy(chunk.data, mp3, len);
     chunk.len = len;
-    if (xQueueSend(s_queue, &chunk, pdMS_TO_TICKS(100)) != pdTRUE) {
+    if (xQueueSend(s_queue, &chunk, pdMS_TO_TICKS(500)) != pdTRUE) {
         free(chunk.data);
-        ESP_LOGW(TAG, "queue full after 100ms, dropping chunk len=%u heap=%lu",
+        s_discontinuity = true;  // signal mp3_play_task to reset decoder on next ID3v2
+        ESP_LOGW(TAG, "queue full after 500ms, dropping chunk len=%u heap=%lu",
                  (unsigned)len, esp_get_free_heap_size());
         return ESP_ERR_TIMEOUT;
     }
@@ -289,4 +316,18 @@ bool mp3_player_is_busy(void) { return s_busy; }
 bool mp3_player_pending(void)
 {
     return s_busy || (s_queue && uxQueueMessagesWaiting(s_queue) > 0);
+}
+
+void mp3_player_stop(void)
+{
+    if (!s_queue) return;
+    s_interrupt_flag = true;
+    g_mic_muted = false;
+    s_busy = false;
+    // Drain queue from outside — discard all pending chunks (audio and done sentinel)
+    mp3_chunk_t chunk;
+    while (xQueueReceive(s_queue, &chunk, 0) == pdTRUE) {
+        if (chunk.data) free(chunk.data);
+    }
+    ESP_LOGI(TAG, "interrupt: player stopped, mic unmuted, queue drained");
 }

@@ -33,6 +33,7 @@ esp_err_t pipeline_ws_player_open(void);
 esp_err_t pipeline_ws_player_write_pcm(const int16_t *pcm, int frames);
 esp_err_t pipeline_ws_player_close(void);
 bool      pipeline_ws_player_is_drained(void);
+esp_err_t pipeline_ws_player_reset(void);
 
 esp_err_t pipeline_ws_set_volume(int volume);
 

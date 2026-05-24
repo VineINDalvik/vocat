@@ -82,6 +82,7 @@ vad_result_t vad_process_frame(vad_ctx_t *ctx, const int16_t *pcm, int frames)
                     ESP_LOGI(TAG,
                              "[OK] end_of_speech (speech=%dms silence=%dms rms=%d)",
                              speech_ms, silence_ms, rms);
+                    vad_reset(ctx);
                     return VAD_RESULT_END_OF_SPEECH;
                 } else {
                     ESP_LOGI(TAG, "noise filtered (%dms < speech_min_ms)", speech_ms);

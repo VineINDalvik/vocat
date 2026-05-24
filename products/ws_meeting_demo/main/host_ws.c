@@ -36,6 +36,9 @@ static volatile bool                 s_sending         = false;
 static volatile bool          s_session_rejected  = false;
 static host_ws_rejected_cb_t  s_rejected_cb       = NULL;
 static void                  *s_rejected_cb_ctx   = NULL;
+// Shared flags readable by feed_task
+extern volatile bool s_skip_cooldown;  // set by ws_session do_interrupt
+extern volatile bool s_interrupted;    // cleared when end_of_speech sent (new question ready)
 static esp_websocket_client_handle_t s_rejected_ws = NULL;  // stashed by feed_task for disconnect to clean up
 
 void host_ws_set_callback(host_ws_msg_cb_t cb, void *ctx)
@@ -170,7 +173,8 @@ static void feed_task(void *arg)
                 ESP_LOGI(TAG, "[LATENCY] end_of_speech_sent ts=%lldms",
                          (long long)(esp_timer_get_time() / 1000));
                 s_sending = false;
-                vad_reset(&vad);  // clear poison state: VAD was returning END_OF_SPEECH every frame
+                s_interrupted = false;  // user finished new question — accept next response audio
+                vad_reset(&vad);
             }
         }
 
@@ -179,10 +183,16 @@ static void feed_task(void *arg)
             s_sending  = true;
             audio_frame_count = 0;
             flush_remaining = 0;
-            cooldown_remaining = COOLDOWN_FRAMES;  // prevent noise/echo re-trigger
+            if (s_skip_cooldown) {
+                s_skip_cooldown = false;
+                cooldown_remaining = 0;
+                ESP_LOGI(TAG, "recv done + interrupt resume, VAD resumed (no cooldown)");
+            } else {
+                cooldown_remaining = COOLDOWN_FRAMES;
+                ESP_LOGI(TAG, "recv done + TTS finished, resuming VAD (with %dms cooldown)",
+                         COOLDOWN_FRAMES * 20);
+            }
             vad_reset(&vad);
-            ESP_LOGI(TAG, "recv done + TTS finished, resuming VAD (with %dms cooldown)",
-                     COOLDOWN_FRAMES * 20);
         }
     }
 
@@ -403,4 +413,20 @@ void host_ws_force_resume(void)
 {
     s_got_done = true;   // triggers the recovery path in feed_task
     ESP_LOGI(TAG, "force resume: s_got_done set to true");
+}
+
+esp_err_t host_ws_send_interrupt(void)
+{
+    if (!s_ws || !esp_websocket_client_is_connected(s_ws)) {
+        ESP_LOGW(TAG, "send_interrupt: WS not connected");
+        return ESP_ERR_INVALID_STATE;
+    }
+    const char *msg = "{\"type\":\"interrupt\"}";
+    int ret = esp_websocket_client_send_text(s_ws, msg, (int)strlen(msg), pdMS_TO_TICKS(1000));
+    if (ret < 0) {
+        ESP_LOGW(TAG, "WS send interrupt failed (%d)", ret);
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "[OK] sent interrupt");
+    return ESP_OK;
 }

@@ -97,7 +97,7 @@ esp_err_t transcribe_ws_connect(const char *session_id)
     esp_websocket_client_config_t cfg = {
         .uri                         = uri,
         .buffer_size                 = 16384,
-        .task_stack                  = 8192,
+        .task_stack                  = 12288,   // 12KB: TLS ops (mbedtls_ssl_read/write) need ~4KB stack
         .task_prio                   = 5,
         .skip_cert_common_name_check = true,
         .network_timeout_ms          = 30000,
@@ -124,7 +124,7 @@ esp_err_t transcribe_ws_connect(const char *session_id)
     pipeline_ws_recorder_open();
     s_feed_run = true;
     xTaskCreatePinnedToCoreWithCaps(
-        feed_task, "transcribe_feed", 8 * 1024, NULL, 5,
+        feed_task, "transcribe_feed", 12 * 1024, NULL, 5,
         &s_feed_task_handle, 1,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     return ESP_OK;

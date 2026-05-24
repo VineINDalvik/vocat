@@ -24,6 +24,7 @@ esp_err_t ws_session_start_meeting(void);
 esp_err_t ws_session_stop_meeting(void);
 esp_err_t ws_session_enter_host(void);
 esp_err_t ws_session_exit_host(void);
+esp_err_t ws_session_interrupt(void);
 
 // Thread-safe UI text update (lv_async_call internally)
 void ws_session_update_ui_status(const char *text);

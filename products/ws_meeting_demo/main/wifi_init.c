@@ -77,8 +77,8 @@ void wifi_register_status_cb(wifi_status_cb_t cb)
 
 void wifi_stop_connecting(void)
 {
-    s_retry_count = MAX_RETRY;  // Prevent event handler from retrying
-    esp_wifi_disconnect();
+    s_connecting = false;  // Prevent STA_START handler from auto-connecting
+    s_retry_count = MAX_RETRY;  // Prevent DISCONNECT handler from retrying
 }
 
 esp_err_t wifi_load_credentials(char *ssid, size_t ssid_len,

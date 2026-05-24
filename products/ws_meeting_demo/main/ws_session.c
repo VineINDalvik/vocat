@@ -6,6 +6,7 @@
 #include "transcribe_ws.h"
 #include "host_ws.h"
 #include "mp3_player.h"
+#include "pipeline_ws.h"
 #include "ui_meeting.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -27,7 +28,7 @@ static const char *TAG = "ws_session";
 volatile bool g_mic_muted = false;
 
 typedef enum {
-    CMD_START, CMD_STOP, CMD_ENTER_HOST, CMD_EXIT_HOST, CMD_RECREATE_SESSION_HOST,
+    CMD_START, CMD_STOP, CMD_ENTER_HOST, CMD_EXIT_HOST, CMD_RECREATE_SESSION_HOST, CMD_INTERRUPT,
 } cmd_type_t;
 
 typedef struct { cmd_type_t type; } session_cmd_t;
@@ -37,6 +38,8 @@ static ws_session_state_t s_state     = WS_SESSION_IDLE;
 static char               s_session_id[64] = {0};
 static uint32_t           s_answer_chunk_count = 0;
 static bool               s_first_answer_text_logged = false;
+volatile bool      s_interrupted = false;
+volatile bool      s_skip_cooldown = false;
 
 // ---------------------------------------------------------------------------
 // State transitions
@@ -95,6 +98,7 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
     (void)ctx;
 
     if (strcmp(type, "transcription") == 0) {
+        s_interrupted = false;  // new speech recognized — old response definitely over
         cJSON *text = cJSON_GetObjectItemCaseSensitive(root, "text");
         if (cJSON_IsString(text) && text->valuestring) {
             ESP_LOGI(TAG, "[LATENCY] transcription_recv ts=%lldms text=\"%.60s\"",
@@ -117,6 +121,10 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
         }
 
     } else if (strcmp(type, "answer_audio") == 0) {
+        if (s_interrupted) {
+            ESP_LOGI(TAG, "discarding answer_audio (interrupt active)");
+            return;
+        }
         cJSON *data_j = cJSON_GetObjectItemCaseSensitive(root, "data");
         if (cJSON_IsString(data_j) && data_j->valuestring) {
             const char *b64   = data_j->valuestring;
@@ -186,7 +194,11 @@ static void on_host_msg(const char *type, cJSON *root, void *ctx)
         }
         // Force VAD resume so s_sending doesn't stay false forever
         host_ws_force_resume();
+    } else if (strcmp(type, "interrupt_ack") == 0) {
+        s_interrupted = false;
+        ESP_LOGI(TAG, "interrupt_ack received — resuming normal flow");
     } else if (strcmp(type, "done") == 0) {
+        s_interrupted = false;
         s_answer_chunk_count = 0;
         s_first_answer_text_logged = false;
         ESP_LOGI(TAG, "[LATENCY] done_recv ts=%lldms — signaling mp3 player",
@@ -356,6 +368,38 @@ static void do_exit_host(void)
     }
 }
 
+static void do_interrupt(void)
+{
+    if (s_state != WS_SESSION_HOST) {
+        ESP_LOGW(TAG, "interrupt ignored — not in HOST state");
+        return;
+    }
+    if (!g_mic_muted && !mp3_player_pending()) {
+        ESP_LOGI(TAG, "interrupt ignored — AI not speaking");
+        return;
+    }
+    ESP_LOGI(TAG, "interrupt: stopping AI response");
+
+    // 1. Stop mp3 player — unmute mic, drain queue, reset decoder state
+    mp3_player_stop();
+
+    // 2. Reset pipeline player ring buffer — discard pending PCM
+    pipeline_ws_player_reset();
+
+    // 3. Send interrupt to server — stop generating TTS
+    host_ws_send_interrupt();
+
+    // 4. Force resume VAD — start listening for new question (skip cooldown)
+    host_ws_force_resume();
+    s_skip_cooldown = true;
+
+    // 5. Mark session as interrupted — discard straggler answer_audio
+    s_interrupted = true;
+
+    // 6. UI feedback
+    ws_session_update_ui_status("Interrupt - Listening...");
+}
+
 // ---------------------------------------------------------------------------
 // Command task
 // ---------------------------------------------------------------------------
@@ -370,6 +414,7 @@ static void session_cmd_task(void *arg)
         case CMD_ENTER_HOST:             do_enter_host();             break;
         case CMD_EXIT_HOST:              do_exit_host();              break;
         case CMD_RECREATE_SESSION_HOST:  do_recreate_session_host();  break;
+        case CMD_INTERRUPT:              do_interrupt();              break;
         }
     }
 }
@@ -393,4 +438,5 @@ esp_err_t ws_session_start_meeting(void)  { enqueue_cmd(CMD_START);      return 
 esp_err_t ws_session_stop_meeting(void)   { enqueue_cmd(CMD_STOP);       return ESP_OK; }
 esp_err_t ws_session_enter_host(void)     { enqueue_cmd(CMD_ENTER_HOST); return ESP_OK; }
 esp_err_t ws_session_exit_host(void)      { enqueue_cmd(CMD_EXIT_HOST);  return ESP_OK; }
+esp_err_t ws_session_interrupt(void)      { enqueue_cmd(CMD_INTERRUPT);  return ESP_OK; }
 ws_session_state_t ws_session_get_state(void) { return s_state; }
