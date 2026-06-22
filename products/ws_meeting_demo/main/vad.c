@@ -45,6 +45,7 @@ vad_result_t vad_process_frame(vad_ctx_t *ctx, const int16_t *pcm, int frames)
                 ctx->state    = VAD_STATE_SPEECH;
                 ctx->hangover = HANGOVER_FRAMES;
                 ESP_LOGI(TAG, "speech start (rms=%d)", rms);
+                return VAD_RESULT_SPEECH_START;
             }
         } else {
             ctx->speech_frames = 0;

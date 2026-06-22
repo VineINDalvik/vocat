@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // pipeline_ws.h — Audio pipeline for ws_meeting_demo.
-//
-// Recording: ES7210 → I2S RX (16kHz 32bit 2ch) → downmix+truncate → 16kHz 16bit mono
-// Playback:  16kHz 16bit mono PCM → ring buffer → 16kHz 32bit stereo → ES8311
+// ReSpeaker XVF3800 + XIAO ESP32-S3 adaptation.
+// Recording: XMOS → I2S RX (16kHz 32bit 2ch) → downmix+truncate → 16kHz 16bit mono
+// Playback:  16kHz 16bit mono PCM → ring buffer → 16kHz 32bit stereo → I2S TX → XMOS
 
 #pragma once
 

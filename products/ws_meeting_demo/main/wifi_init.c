@@ -117,7 +117,10 @@ esp_err_t wifi_save_credentials(const char *ssid, const char *password)
 // Hardcoded fallback networks (tried if primary fails)
 typedef struct { const char *ssid; const char *pass; } wifi_fallback_t;
 static const wifi_fallback_t s_fallbacks[] = {
-    // No fallbacks currently — add WPA2-only networks here if needed
+    { "Vine\xe2\x80\x99s iPhone", "xyy7608055" },
+    { "Mayfair-Test-SG", "Mayfair2019" },
+    { "十一楼无线", "haigui678" },
+    { "长江博士创业园", "@a20250505" },
 };
 #define NUM_FALLBACKS (sizeof(s_fallbacks) / sizeof(s_fallbacks[0]))
 #define MAX_RETRY_FAST  3   // Fewer retries for fallback networks
@@ -127,15 +130,11 @@ esp_err_t wifi_init_sta(void)
     char ssid[33] = {0};
     char password[65] = {0};
 
-    // Try NVS credentials first
-    if (wifi_load_credentials(ssid, sizeof(ssid), password, sizeof(password)) == ESP_OK) {
-        ESP_LOGI(TAG, "using saved WiFi: \"%s\"", ssid);
-    } else {
-        // Fall back to Kconfig defaults
-        ESP_LOGI(TAG, "no saved WiFi, trying Kconfig default \"%s\"", CONFIG_MEETING_WIFI_SSID);
-        strlcpy(ssid, CONFIG_MEETING_WIFI_SSID, sizeof(ssid));
-        strlcpy(password, CONFIG_MEETING_WIFI_PASSWORD, sizeof(password));
-    }
+    // Always use hardcoded default WiFi (bypasses NVS stale creds)
+    strlcpy(ssid, "Vine\xe2\x80\x99s iPhone", sizeof(ssid));
+    strlcpy(password, "xyy7608055", sizeof(password));
+    wifi_save_credentials(ssid, password);
+    ESP_LOGI(TAG, "connecting to default WiFi \"%s\"", ssid);
 
     s_wifi_event_group = xEventGroupCreate();
 
@@ -161,6 +160,7 @@ esp_err_t wifi_init_sta(void)
         wifi_cfg.sta.pmf_cfg.capable = true;
         wifi_cfg.sta.pmf_cfg.required = false;
         wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        wifi_cfg.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
         s_retry_count = 0;
@@ -234,6 +234,7 @@ static void reconnect_task(void *arg)
     cfg.sta.pmf_cfg.capable = true;
     cfg.sta.pmf_cfg.required = false;
     cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    cfg.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 
     ESP_LOGI(TAG, "reconnecting to \"%s\"...", ssid);
 

@@ -36,6 +36,8 @@ static volatile bool                 s_sending         = false;
 static volatile bool          s_session_rejected  = false;
 static host_ws_rejected_cb_t  s_rejected_cb       = NULL;
 static void                  *s_rejected_cb_ctx   = NULL;
+static host_ws_tts_done_cb_t  s_tts_done_cb       = NULL;
+static void                  *s_tts_done_cb_ctx   = NULL;
 // Shared flags readable by feed_task
 extern volatile bool s_skip_cooldown;  // set by ws_session do_interrupt
 extern volatile bool s_interrupted;    // cleared when end_of_speech sent (new question ready)
@@ -61,11 +63,17 @@ void host_ws_set_rejected_cb(host_ws_rejected_cb_t cb, void *ctx)
     s_rejected_cb_ctx = ctx;
 }
 
+void host_ws_set_tts_done_cb(host_ws_tts_done_cb_t cb, void *ctx)
+{
+    s_tts_done_cb     = cb;
+    s_tts_done_cb_ctx = ctx;
+}
+
 // After VAD triggers end_of_speech, keep sending audio for FLUSH_FRAMES
-// more frames so the ASR has time to process buffered speech before the
-// server closes the stream.
-#define FLUSH_FRAMES 15   // 15 x 20ms = 300ms
-#define COOLDOWN_FRAMES 50  // 50 x 20ms = 1000ms after TTS ends, skip VAD to avoid echo/noise re-trigger
+// more frames so the ASR has time to process buffered speech.
+// EOS is sent immediately (not after flush) so the server starts LLM+TTS pipeline sooner.
+#define FLUSH_FRAMES 8    // 8 x 20ms = 160ms
+#define COOLDOWN_FRAMES 30  // 30 x 20ms = 600ms after TTS ends, skip VAD to avoid echo/noise re-trigger
 #define MIN_AUDIO_FRAMES_FOR_EOS 40  // suppress end_of_speech if less than 800ms audio sent (noise guard)
 
 static void feed_task(void *arg)
@@ -122,10 +130,7 @@ static void feed_task(void *arg)
             continue;
         }
 
-        bool should_send = s_sending &&
-            (vad.state == VAD_STATE_SPEECH ||
-             vad.state == VAD_STATE_SILENCE_AFTER_SPEECH ||
-             flush_remaining > 0);
+        bool should_send = s_sending || flush_remaining > 0;
 
         if (should_send) {
             size_t b64_len = 0;
@@ -155,25 +160,27 @@ static void feed_task(void *arg)
                 vad_reset(&vad);
                 audio_frame_count = 0;
             } else {
+                // Send EOS immediately so server starts LLM+TTS pipeline sooner
+                const char *eos = "{\"type\":\"end_of_speech\"}";
+                int ret = esp_websocket_client_send_text(ws, eos, (int)strlen(eos), pdMS_TO_TICKS(1000));
+                if (ret < 0) {
+                    ESP_LOGW(TAG, "WS send end_of_speech failed (%d)", ret);
+                }
+                ESP_LOGI(TAG, "[OK] sent end_of_speech (immediate, %lu audio frames)",
+                         (unsigned long)audio_frame_count);
+                ESP_LOGI(TAG, "[LATENCY] end_of_speech_sent ts=%lldms",
+                         (long long)(esp_timer_get_time() / 1000));
+                s_sending = false;
+                s_interrupted = false;  // user finished new question — accept next response audio
                 flush_remaining = FLUSH_FRAMES;
-                ESP_LOGI(TAG, "VAD end_of_speech — starting %dms flush", FLUSH_FRAMES * 20);
+                ESP_LOGI(TAG, "VAD end_of_speech — flushing %dms remaining audio", FLUSH_FRAMES * 20);
             }
         }
 
         if (flush_remaining > 0) {
             flush_remaining--;
             if (flush_remaining == 0) {
-                const char *eos = "{\"type\":\"end_of_speech\"}";
-                int ret = esp_websocket_client_send_text(ws, eos, (int)strlen(eos), pdMS_TO_TICKS(1000));
-                if (ret < 0) {
-                    ESP_LOGW(TAG, "WS send end_of_speech failed (%d)", ret);
-                }
-                ESP_LOGI(TAG, "[OK] sent end_of_speech (after flush, %lu audio frames)",
-                         (unsigned long)audio_frame_count);
-                ESP_LOGI(TAG, "[LATENCY] end_of_speech_sent ts=%lldms",
-                         (long long)(esp_timer_get_time() / 1000));
-                s_sending = false;
-                s_interrupted = false;  // user finished new question — accept next response audio
+                ESP_LOGI(TAG, "flush complete, vad reset");
                 vad_reset(&vad);
             }
         }
@@ -350,7 +357,8 @@ esp_err_t host_ws_connect(const char *session_id)
         .task_prio                   = 5,
         .skip_cert_common_name_check = true,
         .network_timeout_ms          = 30000,
-        .reconnect_timeout_ms        = 10000,
+        .reconnect_timeout_ms        = 3000,    // faster reconnect (was 10s, too slow for continuous conversation)
+        .ping_interval_sec           = 3,       // keep WS alive through NAT/firewall (iPhone hotspot is aggressive)
     };
     s_ws = esp_websocket_client_init(&cfg);
     esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY, ws_event_handler, NULL);
@@ -370,7 +378,14 @@ esp_err_t host_ws_connect(const char *session_id)
     }
     ESP_LOGI(TAG, "[OK] connected wss://.../ws/host/%s", session_id);
 
-    pipeline_ws_recorder_open();
+    esp_err_t rec_ret = pipeline_ws_recorder_open();
+    if (rec_ret != ESP_OK) {
+        ESP_LOGE(TAG, "[FAIL] recorder open failed (%d) — duplicate connect prevented", rec_ret);
+        esp_websocket_client_stop(s_ws);
+        esp_websocket_client_destroy(s_ws);
+        s_ws = NULL;
+        return ESP_FAIL;
+    }
     s_feed_run = true;
     s_sending  = true;
     s_got_done = false;

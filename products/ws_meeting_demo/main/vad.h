@@ -22,6 +22,7 @@ typedef struct {
 
 typedef enum {
     VAD_RESULT_CONTINUE,
+    VAD_RESULT_SPEECH_START,
     VAD_RESULT_END_OF_SPEECH,
 } vad_result_t;
 

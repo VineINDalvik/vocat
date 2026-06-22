@@ -11,10 +11,6 @@ idf_component_register(
         driver
         esp_driver_i2s
         esp_driver_i2c
-        espressif__esp_codec_dev
-        esp_vocat
-        espressif__esp_lvgl_port
-        lvgl__lvgl
         esp_websocket_client
         esp_http_client
         json
@@ -22,3 +18,5 @@ idf_component_register(
         mbedtls
         esp_timer
 )
+
+target_link_libraries(${COMPONENT_LIB} PRIVATE m)

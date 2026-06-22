@@ -32,6 +32,9 @@ void ws_session_update_ui_action(const char *text);
 
 ws_session_state_t ws_session_get_state(void);
 
+// Initialize BOOT button for mode toggle (must be called after hw_init)
+void ws_session_btn_init(void);
+
 #ifdef __cplusplus
 }
 #endif

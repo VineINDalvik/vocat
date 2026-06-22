@@ -16,6 +16,10 @@ esp_err_t transcribe_ws_send_end(void);
 // Stop feed task, close recorder, disconnect WS
 esp_err_t transcribe_ws_disconnect(void);
 
+// Wake word callback: called when "clare" is detected in a final transcript
+typedef void (*transcribe_wake_word_cb_t)(void *ctx);
+void transcribe_ws_set_wake_word_cb(transcribe_wake_word_cb_t cb, void *ctx);
+
 #ifdef __cplusplus
 }
 #endif
