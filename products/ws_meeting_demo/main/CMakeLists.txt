@@ -1,7 +1,15 @@
-file(GLOB_RECURSE MAIN_SRCS ./*.c ./*.cpp)
-
 idf_component_register(
-    SRCS ${MAIN_SRCS}
+    SRCS
+        "api_client.c"
+        "host_ws.c"
+        "main.c"
+        "mp3_player.c"
+        "pipeline_ws.c"
+        "transcribe_ws.c"
+        "ui_meeting.c"
+        "vad.c"
+        "wifi_init.c"
+        "ws_session.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
