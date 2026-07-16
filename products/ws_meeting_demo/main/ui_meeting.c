@@ -14,6 +14,9 @@
 #include "freertos/task.h"
 #include <string.h>
 
+extern const uint8_t clare_avatar_map_start[] asm("_binary_clare_avatar_rgb565a8_start");
+extern const uint8_t clare_avatar_map_end[] asm("_binary_clare_avatar_rgb565a8_end");
+
 static const char *TAG = "ui_meeting";
 
 #define SCREEN_W    360
@@ -43,10 +46,11 @@ static lv_obj_t *s_btn_wifi    = NULL;
 static lv_obj_t *s_btn_volume  = NULL;
 static lv_obj_t *s_mic_dot      = NULL;
 static lv_obj_t *s_brand_label  = NULL;
-static lv_obj_t *s_orb_glow     = NULL;
+static lv_obj_t *s_clare_avatar = NULL;
 static lv_obj_t *s_volume_panel = NULL;
 static lv_obj_t *s_volume_slider = NULL;
 static lv_obj_t *s_volume_value = NULL;
+static lv_image_dsc_t s_clare_avatar_dsc;
 
 // WiFi settings
 static lv_obj_t *s_wifi_ap_list = NULL;     // lv_list for scan results
@@ -109,27 +113,22 @@ static lv_obj_t *make_button(lv_obj_t *parent, const char *label_text,
     lv_obj_t *btn = lv_btn_create(parent);
     lv_obj_set_size(btn, w, h);
     lv_obj_set_pos(btn, x, y);
-    lv_obj_set_style_radius(btn, 22, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x7257D8), 0);
-    lv_obj_set_style_bg_grad_color(btn, lv_color_hex(0x4F6EF7), 0);
-    lv_obj_set_style_bg_grad_dir(btn, LV_GRAD_DIR_HOR, 0);
+    lv_obj_set_style_radius(btn, 24, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x7659D7), 0);
+    lv_obj_set_style_bg_grad_color(btn, lv_color_hex(0x7659D7), 0);
+    lv_obj_set_style_bg_grad_dir(btn, LV_GRAD_DIR_NONE, 0);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, lv_color_hex(0xAFA1F0), 0);
-    lv_obj_set_style_shadow_width(btn, 18, 0);
-    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x5B45B8), 0);
-    lv_obj_set_style_shadow_opa(btn, LV_OPA_40, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x8B72E8), LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn, lv_color_hex(0x9882E6), 0);
+    lv_obj_set_style_shadow_width(btn, 12, 0);
+    lv_obj_set_style_shadow_ofs_y(btn, 5, 0);
+    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x0B0813), 0);
+    lv_obj_set_style_shadow_opa(btn, LV_OPA_30, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x8D73E4), LV_STATE_PRESSED);
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, label_text);
     lv_obj_center(lbl);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
     return btn;
-}
-
-static void orb_pulse_cb(void *obj, int32_t value)
-{
-    lv_obj_set_style_bg_opa((lv_obj_t *)obj, (lv_opa_t)value, 0);
-    lv_obj_set_style_border_opa((lv_obj_t *)obj, (lv_opa_t)value, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -330,33 +329,16 @@ static void wifi_ap_selected_cb(lv_event_t *e)
 void ui_meeting_create(void)
 {
     lv_obj_t *screen = lv_scr_act();
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0x100D22), 0);
-    lv_obj_set_style_bg_grad_color(screen, lv_color_hex(0x21183D), 0);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x171320), 0);
+    lv_obj_set_style_bg_grad_color(screen, lv_color_hex(0x2B203A), 0);
     lv_obj_set_style_bg_grad_dir(screen, LV_GRAD_DIR_VER, 0);
-
-    // Ambient color fields echo Clare's violet / mint visual language while
-    // preserving contrast on the small circular display.
-    lv_obj_t *mint_glow = lv_obj_create(screen);
-    lv_obj_remove_style_all(mint_glow);
-    lv_obj_set_size(mint_glow, 125, 125);
-    lv_obj_align(mint_glow, LV_ALIGN_TOP_RIGHT, 35, -35);
-    lv_obj_set_style_radius(mint_glow, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(mint_glow, lv_color_hex(0x56D7B0), 0);
-    lv_obj_set_style_bg_opa(mint_glow, LV_OPA_10, 0);
-
-    lv_obj_t *violet_glow = lv_obj_create(screen);
-    lv_obj_remove_style_all(violet_glow);
-    lv_obj_set_size(violet_glow, 155, 155);
-    lv_obj_align(violet_glow, LV_ALIGN_BOTTOM_LEFT, -55, 45);
-    lv_obj_set_style_radius(violet_glow, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(violet_glow, lv_color_hex(0x8D6DF2), 0);
-    lv_obj_set_style_bg_opa(violet_glow, LV_OPA_10, 0);
 
     s_brand_label = lv_label_create(screen);
     lv_obj_set_style_text_font(s_brand_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_brand_label, lv_color_hex(0xB8F1DE), 0);
-    lv_label_set_text(s_brand_label, "CLARE  •  READY");
-    lv_obj_align(s_brand_label, LV_ALIGN_TOP_MID, 0, 19);
+    lv_obj_set_style_text_color(s_brand_label, lv_color_hex(0xC9BDF2), 0);
+    lv_obj_set_style_text_letter_space(s_brand_label, 2, 0);
+    lv_label_set_text(s_brand_label, "CLARE");
+    lv_obj_align(s_brand_label, LV_ALIGN_TOP_MID, 0, 18);
 
     // ---- Title ----
     s_title_label = lv_label_create(screen);
@@ -364,9 +346,9 @@ void ui_meeting_create(void)
     lv_obj_set_style_text_color(s_title_label, lv_color_hex(0xFFFDFB), 0);
     lv_obj_set_width(s_title_label, SCREEN_W - 40);
     lv_label_set_long_mode(s_title_label, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(s_title_label, "Your meeting, in focus");
+    lv_label_set_text(s_title_label, "Ready when you are");
     lv_obj_set_style_text_align(s_title_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_title_label, LV_ALIGN_TOP_MID, 0, TITLE_Y);
+    lv_obj_align(s_title_label, LV_ALIGN_TOP_MID, 0, 174);
 
     // ---- Status label ----
     s_status_label = lv_label_create(screen);
@@ -376,7 +358,7 @@ void ui_meeting_create(void)
     lv_label_set_long_mode(s_status_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_status_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_status_label, "");
-    lv_obj_align(s_status_label, LV_ALIGN_TOP_MID, 0, STATUS_Y);
+    lv_obj_align(s_status_label, LV_ALIGN_TOP_MID, 0, 204);
     lv_obj_add_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
 
     // ---- Action label ----
@@ -390,65 +372,62 @@ void ui_meeting_create(void)
     lv_obj_align(s_action_label, LV_ALIGN_TOP_MID, 0, ACTION_Y);
     lv_obj_add_flag(s_action_label, LV_OBJ_FLAG_HIDDEN);
 
+    // ---- Clare avatar: the assistant is the visual anchor, not decoration ----
+    s_clare_avatar_dsc.header.w = 112;
+    s_clare_avatar_dsc.header.h = 112;
+    s_clare_avatar_dsc.header.stride = 112 * 2;
+    s_clare_avatar_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    s_clare_avatar_dsc.header.cf = LV_COLOR_FORMAT_RGB565A8;
+    s_clare_avatar_dsc.data = clare_avatar_map_start;
+    s_clare_avatar_dsc.data_size = (size_t)(clare_avatar_map_end - clare_avatar_map_start);
+    s_clare_avatar = lv_image_create(screen);
+    lv_image_set_src(s_clare_avatar, &s_clare_avatar_dsc);
+    lv_obj_align(s_clare_avatar, LV_ALIGN_TOP_MID, 0, 53);
+
     // ---- Listening indicator ----
     s_mic_dot = lv_obj_create(screen);
     lv_obj_set_size(s_mic_dot, MIC_DOT_SIZE, MIC_DOT_SIZE);
     lv_obj_set_style_radius(s_mic_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_mic_dot, lv_color_hex(0x75E3BF), 0);
     lv_obj_set_style_border_width(s_mic_dot, 0, 0);
-    lv_obj_align(s_mic_dot, LV_ALIGN_TOP_MID, 0, TITLE_Y - MIC_DOT_SIZE - 8);
+    lv_obj_align(s_mic_dot, LV_ALIGN_TOP_MID, -74, 188);
     lv_obj_add_flag(s_mic_dot, LV_OBJ_FLAG_HIDDEN);
 
-    // ---- Animated Clare orb / primary action ----
-    s_orb_glow = lv_obj_create(screen);
-    lv_obj_remove_style_all(s_orb_glow);
-    lv_obj_set_size(s_orb_glow, 164, 164);
-    lv_obj_align(s_orb_glow, LV_ALIGN_TOP_MID, 0, 88);
-    lv_obj_set_style_radius(s_orb_glow, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_orb_glow, lv_color_hex(0x8268E8), 0);
-    lv_obj_set_style_bg_opa(s_orb_glow, LV_OPA_20, 0);
-    lv_obj_set_style_border_width(s_orb_glow, 2, 0);
-    lv_obj_set_style_border_color(s_orb_glow, lv_color_hex(0xA9EAD3), 0);
-    lv_obj_set_style_border_opa(s_orb_glow, LV_OPA_30, 0);
-
-    lv_anim_t pulse;
-    lv_anim_init(&pulse);
-    lv_anim_set_var(&pulse, s_orb_glow);
-    lv_anim_set_values(&pulse, LV_OPA_20, LV_OPA_50);
-    lv_anim_set_time(&pulse, 1400);
-    lv_anim_set_playback_time(&pulse, 1400);
-    lv_anim_set_repeat_count(&pulse, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_set_exec_cb(&pulse, orb_pulse_cb);
-    lv_anim_start(&pulse);
-
-    s_btn_start = make_button(screen, "Start Meeting",
-                              (SCREEN_W - 142) / 2, 99,
-                              142, 142, btn_start_cb);
-    lv_obj_set_style_radius(s_btn_start, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_btn_start, lv_color_hex(0x7558D6), 0);
-    lv_obj_set_style_bg_grad_color(s_btn_start, lv_color_hex(0x4F6EF7), 0);
-    lv_obj_set_style_bg_grad_dir(s_btn_start, LV_GRAD_DIR_VER, 0);
+    s_btn_start = make_button(screen, "Start meeting  " LV_SYMBOL_PLAY,
+                              65, 237, 230, 54, btn_start_cb);
+    lv_obj_set_style_bg_color(s_btn_start, lv_color_hex(0xF3C552), 0);
+    lv_obj_set_style_bg_grad_color(s_btn_start, lv_color_hex(0xF3C552), 0);
+    lv_obj_set_style_border_color(s_btn_start, lv_color_hex(0xFFE394), 0);
+    lv_obj_set_style_text_color(s_btn_start, lv_color_hex(0x2B2034), 0);
     lv_obj_set_style_text_font(lv_obj_get_child(s_btn_start, 0), &lv_font_montserrat_20, 0);
 
     s_btn_wifi = make_button(screen, LV_SYMBOL_WIFI "  Wi-Fi",
-                              62, 304, 110, 42, btn_wifi_cb);
+                              84, 302, 92, 38, btn_wifi_cb);
     s_btn_volume = make_button(screen, LV_SYMBOL_VOLUME_MAX "  75%",
-                              188, 304, 110, 42, btn_volume_cb);
-    lv_obj_set_style_bg_color(s_btn_wifi, lv_color_hex(0x2B2447), 0);
-    lv_obj_set_style_bg_grad_color(s_btn_wifi, lv_color_hex(0x2B2447), 0);
-    lv_obj_set_style_bg_color(s_btn_volume, lv_color_hex(0x2B2447), 0);
-    lv_obj_set_style_bg_grad_color(s_btn_volume, lv_color_hex(0x2B2447), 0);
+                              184, 302, 92, 38, btn_volume_cb);
+    lv_obj_set_style_bg_color(s_btn_wifi, lv_color_hex(0x332A40), 0);
+    lv_obj_set_style_bg_grad_color(s_btn_wifi, lv_color_hex(0x332A40), 0);
+    lv_obj_set_style_border_color(s_btn_wifi, lv_color_hex(0x574A69), 0);
+    lv_obj_set_style_shadow_width(s_btn_wifi, 0, 0);
+    lv_obj_set_style_bg_color(s_btn_volume, lv_color_hex(0x332A40), 0);
+    lv_obj_set_style_bg_grad_color(s_btn_volume, lv_color_hex(0x332A40), 0);
+    lv_obj_set_style_border_color(s_btn_volume, lv_color_hex(0x574A69), 0);
+    lv_obj_set_style_shadow_width(s_btn_volume, 0, 0);
 
     // ---- MEETING: [Host Mode] [Stop Meeting] ----
     int two_btn_total = BTN_W_HALF * 2 + BTN_GAP;
     int two_btn_x = (SCREEN_W - two_btn_total) / 2;
 
-    s_btn_host = make_button(screen, "Host Mode",
-                             two_btn_x, 185, BTN_W_HALF, BTN_H, btn_host_cb);
+    s_btn_host = make_button(screen, "Host tools",
+                             two_btn_x, 220, BTN_W_HALF, 50, btn_host_cb);
 
-    s_btn_stop = make_button(screen, "Stop Meeting",
-                             two_btn_x + BTN_W_HALF + BTN_GAP, 185,
-                             BTN_W_HALF, BTN_H, btn_stop_cb);
+    s_btn_stop = make_button(screen, "End meeting",
+                             two_btn_x + BTN_W_HALF + BTN_GAP, 220,
+                             BTN_W_HALF, 50, btn_stop_cb);
+    lv_obj_set_style_bg_color(s_btn_stop, lv_color_hex(0x3A2A3B), 0);
+    lv_obj_set_style_bg_grad_color(s_btn_stop, lv_color_hex(0x3A2A3B), 0);
+    lv_obj_set_style_border_color(s_btn_stop, lv_color_hex(0xE59AAE), 0);
+    lv_obj_set_style_text_color(s_btn_stop, lv_color_hex(0xFFD8E1), 0);
 
     // ---- HOST: [Interrupt] (top) [Exit Host Mode] (bottom) ---- stacked vertically for round screen
     s_btn_interrupt = make_button(screen, "Interrupt",
@@ -597,7 +576,7 @@ static void apply_state(ui_state_t state)
     lv_obj_add_flag(s_btn_interrupt, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_btn_wifi,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_btn_volume, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_orb_glow, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_clare_avatar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_volume_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_action_label, LV_OBJ_FLAG_HIDDEN);
@@ -606,29 +585,43 @@ static void apply_state(ui_state_t state)
 
     switch (state) {
     case UI_STATE_IDLE:
-        lv_label_set_text(s_brand_label, "CLARE  •  READY");
-        lv_label_set_text(s_title_label, "Your meeting, in focus");
+        lv_label_set_text(s_brand_label, "CLARE");
+        lv_label_set_text(s_title_label, "Ready when you are");
+        lv_obj_align(s_title_label, LV_ALIGN_TOP_MID, 0, 174);
+        lv_obj_align(s_status_label, LV_ALIGN_TOP_MID, 0, 204);
+        lv_image_set_scale(s_clare_avatar, 256);
+        lv_obj_align(s_clare_avatar, LV_ALIGN_TOP_MID, 0, 53);
+        lv_obj_set_pos(s_btn_wifi, 84, 302);
+        lv_obj_set_pos(s_btn_volume, 184, 302);
         lv_obj_clear_flag(s_btn_start, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_btn_wifi,  LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_btn_volume, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_orb_glow, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_clare_avatar, LV_OBJ_FLAG_HIDDEN);
         if (s_action_clear_timer) esp_timer_stop(s_action_clear_timer);
         break;
 
     case UI_STATE_MEETING:
-        lv_label_set_text(s_brand_label, "CLARE  •  LIVE");
-        lv_label_set_text(s_title_label, "Listening with you");
+        lv_label_set_text(s_brand_label, "CLARE   •   LIVE");
+        lv_label_set_text(s_title_label, "Meeting in progress");
+        lv_obj_align(s_title_label, LV_ALIGN_TOP_MID, 0, 43);
+        lv_obj_align(s_status_label, LV_ALIGN_TOP_MID, 0, 179);
+        lv_image_set_scale(s_clare_avatar, 188);
+        lv_obj_align(s_clare_avatar, LV_ALIGN_TOP_MID, 0, 83);
+        lv_obj_set_pos(s_btn_volume, 134, 287);
         lv_obj_clear_flag(s_btn_host,   LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_btn_stop,   LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_btn_volume, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_orb_glow, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_clare_avatar, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_mic_dot, LV_OBJ_FLAG_HIDDEN);
         break;
 
     case UI_STATE_HOST:
-        lv_label_set_text(s_brand_label, "CLARE  •  HOST");
+        lv_label_set_text(s_brand_label, "CLARE   •   HOST");
         lv_label_set_text(s_title_label, "Host controls");
+        lv_obj_align(s_title_label, LV_ALIGN_TOP_MID, 0, 45);
+        lv_obj_align(s_status_label, LV_ALIGN_TOP_MID, 0, 274);
+        lv_obj_set_pos(s_btn_volume, 134, 306);
         lv_obj_clear_flag(s_btn_interrupt, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_btn_exit,   LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_btn_volume, LV_OBJ_FLAG_HIDDEN);
@@ -636,8 +629,9 @@ static void apply_state(ui_state_t state)
         break;
 
     case UI_STATE_WIFI_SETTINGS:
-        lv_label_set_text(s_brand_label, "CLARE  •  CONNECT");
+        lv_label_set_text(s_brand_label, "CLARE   •   CONNECT");
         lv_label_set_text(s_title_label, "Choose Wi-Fi");
+        lv_obj_align(s_title_label, LV_ALIGN_TOP_MID, 0, 42);
         // Show scan list, trigger scan
         lv_obj_clear_flag(s_wifi_ap_list, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_wifi_btn_back, LV_OBJ_FLAG_HIDDEN);

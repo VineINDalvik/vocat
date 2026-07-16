@@ -29,4 +29,6 @@ idf_component_register(
         esp-tls
         mbedtls
         esp_timer
+    EMBED_FILES
+        "assets/clare_avatar.rgb565a8"
 )

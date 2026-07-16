@@ -301,7 +301,7 @@ static void do_start_meeting(void)
 
     set_state(WS_SESSION_MEETING);
     ui_meeting_set_state(UI_STATE_MEETING);
-    ws_session_update_ui_status("[Meeting]");
+    ws_session_update_ui_status("Listening  •  live notes on");
 }
 
 static void do_stop_meeting(void)
