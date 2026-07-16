@@ -348,7 +348,7 @@ esp_err_t host_ws_connect(const char *session_id)
         .buffer_size                 = 131072,  // 128KB: answer_audio JSON (MP3 base64) can exceed 16KB
         .task_stack                  = 12288,   // 12KB: TLS ops (mbedtls_ssl_read/write) need ~4KB stack
         .task_prio                   = 5,
-        .skip_cert_common_name_check = true,
+        .skip_cert_common_name_check = false,
         .network_timeout_ms          = 30000,
         .reconnect_timeout_ms        = 10000,
     };

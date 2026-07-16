@@ -22,6 +22,7 @@ extern "C" {
 
 esp_err_t pipeline_ws_hw_init(void);
 esp_err_t pipeline_ws_hw_deinit(void);
+bool pipeline_ws_hw_is_ready(void);
 
 // Recorder: outputs 16kHz 16bit mono PCM
 esp_err_t pipeline_ws_recorder_open(void);
@@ -36,6 +37,8 @@ bool      pipeline_ws_player_is_drained(void);
 esp_err_t pipeline_ws_player_reset(void);
 
 esp_err_t pipeline_ws_set_volume(int volume);
+int       pipeline_ws_get_volume(void);
+esp_err_t pipeline_ws_save_volume(int volume);
 
 #ifdef __cplusplus
 }

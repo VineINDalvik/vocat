@@ -248,7 +248,13 @@ esp_err_t mp3_player_open(void)
     s_done_sem = xSemaphoreCreateBinary();
     if (!s_done_sem) { vQueueDelete(s_queue); s_queue = NULL; return ESP_ERR_NO_MEM; }
 
-    pipeline_ws_player_open();
+    esp_err_t player_err = pipeline_ws_player_open();
+    if (player_err != ESP_OK) {
+        vQueueDelete(s_queue); s_queue = NULL;
+        vSemaphoreDelete(s_done_sem); s_done_sem = NULL;
+        ESP_LOGE(TAG, "pipeline player open failed: %s", esp_err_to_name(player_err));
+        return player_err;
+    }
 
     s_task_run = true;
     BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
@@ -256,6 +262,8 @@ esp_err_t mp3_player_open(void)
         &s_task, 1,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ret != pdPASS) {
+        s_task_run = false;
+        pipeline_ws_player_close();
         vQueueDelete(s_queue); s_queue = NULL;
         vSemaphoreDelete(s_done_sem); s_done_sem = NULL;
         return ESP_ERR_NO_MEM;

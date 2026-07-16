@@ -4,4 +4,7 @@ dependencies:
     version: '>=5.5.0'
   espressif/zlib:
     version: '>=1.0.0'
-  # Codec components are reused from ../speaker/managed_components via EXTRA_COMPONENT_DIRS
+  espressif/esp_websocket_client: '1.5.0'
+  espressif/esp_codec_dev: '*'
+  # esp_vocat relies on the repository patch for this exact release.
+  espressif/esp_lvgl_port: '2.6.0'

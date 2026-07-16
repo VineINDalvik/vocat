@@ -1,6 +1,6 @@
 # WiFi credentials — primary network (fallbacks hardcoded in wifi_init.c)
-CONFIG_MEETING_WIFI_SSID="Mayfair-Test-SG"
-CONFIG_MEETING_WIFI_PASSWORD="Mayfair2019"
+CONFIG_MEETING_WIFI_SSID="Vine’s iPhone"
+CONFIG_MEETING_WIFI_PASSWORD="xyy7608955"
 
 # Public Voice API
 CONFIG_WS_MEETING_API_BASE_URL="https://clare.vinex.top/voice-api"

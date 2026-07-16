@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "lwip/inet.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "wifi_init";
@@ -23,6 +24,7 @@ static const char *TAG = "wifi_init";
 #define NVS_NAMESPACE  "wifi_creds"
 #define NVS_KEY_SSID    "ssid"
 #define NVS_KEY_PASS    "password"
+#define PREFERRED_WIFI_SSID "Vine’s iPhone"
 
 static EventGroupHandle_t s_wifi_event_group = NULL;
 static int                s_retry_count      = 0;
@@ -53,6 +55,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
     } else if (base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&e->ip_info.ip));
+        // The iPhone hotspot DNS intermittently puts an unreachable Cloudflare
+        // edge first. Use a stable resolver whose current answer orders the
+        // reachable edge first; ESP-TLS only attempts the first DNS address.
+        esp_netif_dns_info_t dns = {0};
+        dns.ip.type = IPADDR_TYPE_V4;
+        dns.ip.u_addr.ip4.addr = ipaddr_addr("1.1.1.1");
+        esp_err_t dns_err = esp_netif_set_dns_info(e->esp_netif, ESP_NETIF_DNS_MAIN, &dns);
+        ESP_LOGI(TAG, "DNS set to 1.1.1.1: %s", esp_err_to_name(dns_err));
         s_retry_count = 0;
         esp_netif_set_default_netif(e->esp_netif);
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
@@ -127,9 +137,11 @@ esp_err_t wifi_init_sta(void)
     char ssid[33] = {0};
     char password[65] = {0};
 
-    // Try NVS credentials first
+    // NVS is the source of truth after the user chooses a network. The shipped
+    // default is Vine's iPhone, so it reconnects automatically on every boot.
     if (wifi_load_credentials(ssid, sizeof(ssid), password, sizeof(password)) == ESP_OK) {
-        ESP_LOGI(TAG, "using saved WiFi: \"%s\"", ssid);
+        ESP_LOGI(TAG, "auto-connecting saved WiFi: \"%s\"%s", ssid,
+                 strcmp(ssid, PREFERRED_WIFI_SSID) == 0 ? " (preferred)" : "");
     } else {
         // Fall back to Kconfig defaults
         ESP_LOGI(TAG, "no saved WiFi, trying Kconfig default \"%s\"", CONFIG_MEETING_WIFI_SSID);
@@ -150,6 +162,9 @@ esp_err_t wifi_init_sta(void)
     register_handlers();
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    // Modem sleep can stall the first TLS handshake on phone hotspots. This
+    // must be configured at runtime; CONFIG_ESP_WIFI_PS_NONE is obsolete.
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     // Try the primary credentials, then fallback networks
     // Primary: full retries; fallbacks: fewer retries for faster boot
@@ -176,13 +191,15 @@ esp_err_t wifi_init_sta(void)
                                                pdFALSE, pdFALSE,
                                                pdMS_TO_TICKS(30000));
 
-        esp_wifi_stop();
-
         if (bits & WIFI_CONNECTED_BIT) {
-            // Restart WiFi to keep the driver active for scan/reconnect
-            esp_wifi_start();
+            // Keep the successful association alive. Stopping and immediately
+            // restarting here produced a needless disconnect and made the
+            // meeting preflight race the DHCP/TLS reconnect on phone hotspots.
+            ESP_LOGI(TAG, "WiFi ready; keeping current connection active");
             return ESP_OK;
         }
+
+        esp_wifi_stop();
 
         ESP_LOGW(TAG, "\"%s\" failed, trying next network...", ssid);
 

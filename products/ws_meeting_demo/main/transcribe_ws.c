@@ -99,13 +99,23 @@ esp_err_t transcribe_ws_connect(const char *session_id)
         .buffer_size                 = 16384,
         .task_stack                  = 12288,   // 12KB: TLS ops (mbedtls_ssl_read/write) need ~4KB stack
         .task_prio                   = 5,
-        .skip_cert_common_name_check = true,
+        .skip_cert_common_name_check = false,
         .network_timeout_ms          = 30000,
         .reconnect_timeout_ms        = 10000,
     };
     s_ws = esp_websocket_client_init(&cfg);
+    if (!s_ws) {
+        ESP_LOGE(TAG, "[FAIL] websocket client init failed");
+        return ESP_ERR_NO_MEM;
+    }
     esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY, ws_event_handler, NULL);
-    esp_websocket_client_start(s_ws);
+    esp_err_t start_err = esp_websocket_client_start(s_ws);
+    if (start_err != ESP_OK) {
+        ESP_LOGE(TAG, "[FAIL] websocket start failed: %s", esp_err_to_name(start_err));
+        esp_websocket_client_destroy(s_ws);
+        s_ws = NULL;
+        return start_err;
+    }
 
     // Wait up to 15s for connection (TLS handshake can take >5s)
     for (int i = 0; i < 150; i++) {
@@ -121,12 +131,27 @@ esp_err_t transcribe_ws_connect(const char *session_id)
     }
     ESP_LOGI(TAG, "[OK] connected wss://.../ws/transcribe/%s", session_id);
 
-    pipeline_ws_recorder_open();
+    esp_err_t recorder_err = pipeline_ws_recorder_open();
+    if (recorder_err != ESP_OK) {
+        esp_websocket_client_stop(s_ws);
+        esp_websocket_client_destroy(s_ws);
+        s_ws = NULL;
+        return recorder_err;
+    }
     s_feed_run = true;
-    xTaskCreatePinnedToCoreWithCaps(
+    BaseType_t task_ok = xTaskCreatePinnedToCoreWithCaps(
         feed_task, "transcribe_feed", 12 * 1024, NULL, 5,
         &s_feed_task_handle, 1,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (task_ok != pdPASS) {
+        s_feed_run = false;
+        pipeline_ws_recorder_close();
+        esp_websocket_client_stop(s_ws);
+        esp_websocket_client_destroy(s_ws);
+        s_ws = NULL;
+        ESP_LOGE(TAG, "[FAIL] feed task creation failed");
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
 }
 

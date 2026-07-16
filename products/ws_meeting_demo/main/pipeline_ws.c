@@ -17,6 +17,7 @@
 #include "driver/i2s_std.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
+#include "nvs.h"
 #include "es8311_codec.h"
 #include "es7210_adc.h"
 #include "bsp/esp_vocat.h"
@@ -78,6 +79,10 @@ static SemaphoreHandle_t         s_play_done_sem   = NULL;
 static volatile size_t           s_pre_roll_written = 0; // bytes written since last open/underrun
 static volatile bool             s_play_drained     = false; // true when ring buffer has emptied
 static volatile bool             s_player_reset     = false; // signal player_task to drain ring buffer and reset
+static int                       s_output_volume    = 75;
+
+#define AUDIO_NVS_NAMESPACE "meeting_audio"
+#define AUDIO_NVS_VOLUME    "volume"
 
 // ---------------------------------------------------------------------------
 // Sample format helpers
@@ -187,8 +192,16 @@ esp_err_t pipeline_ws_hw_init(void)
         .sample_rate = CODEC_SAMPLE_RATE, .channel = CODEC_CHANNELS, .bits_per_sample = CODEC_BITS,
     };
     ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_play_dev, &play_info), TAG, "ES8311 open failed");
-    ESP_RETURN_ON_ERROR(esp_codec_dev_set_out_vol(s_play_dev, 93), TAG, "ES8311 set vol failed");
-    ESP_LOGI(TAG, "[OK] ES8311 (DAC) ready");
+    nvs_handle_t volume_nvs;
+    uint8_t saved_volume = 0;
+    if (nvs_open(AUDIO_NVS_NAMESPACE, NVS_READONLY, &volume_nvs) == ESP_OK) {
+        if (nvs_get_u8(volume_nvs, AUDIO_NVS_VOLUME, &saved_volume) == ESP_OK && saved_volume <= 100) {
+            s_output_volume = saved_volume;
+        }
+        nvs_close(volume_nvs);
+    }
+    ESP_RETURN_ON_ERROR(esp_codec_dev_set_out_vol(s_play_dev, s_output_volume), TAG, "ES8311 set vol failed");
+    ESP_LOGI(TAG, "[OK] ES8311 (DAC) ready, volume=%d", s_output_volume);
 
     // ES7210 (ADC)
     audio_codec_i2c_cfg_t i2c_es7210 = {
@@ -199,7 +212,7 @@ esp_err_t pipeline_ws_hw_init(void)
 
     es7210_codec_cfg_t es7210_cfg = {
         .ctrl_if = es7210_ctrl, .master_mode = false,
-        .mic_selected = ES7120_SEL_MIC1 | ES7120_SEL_MIC2,
+        .mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2,
     };
     const audio_codec_if_t *es7210_if = es7210_codec_new(&es7210_cfg);
     ESP_RETURN_ON_FALSE(es7210_if, ESP_FAIL, TAG, "ES7210 codec_new failed");
@@ -232,6 +245,11 @@ esp_err_t pipeline_ws_hw_deinit(void)
     s_i2c_bus   = NULL;
     s_hw_inited = false;
     return ESP_OK;
+}
+
+bool pipeline_ws_hw_is_ready(void)
+{
+    return s_hw_inited && s_i2s_tx && s_i2s_rx && s_play_dev && s_rec_dev;
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +471,27 @@ esp_err_t pipeline_ws_player_reset(void)
 esp_err_t pipeline_ws_set_volume(int volume)
 {
     ESP_RETURN_ON_FALSE(s_play_dev, ESP_ERR_INVALID_STATE, TAG, "Player not initialized");
-    return (esp_codec_dev_set_out_vol(s_play_dev, volume) == ESP_CODEC_DEV_OK)
-           ? ESP_OK : ESP_FAIL;
+    if (volume < 0) volume = 0;
+    if (volume > 100) volume = 100;
+    esp_err_t err = (esp_codec_dev_set_out_vol(s_play_dev, volume) == ESP_CODEC_DEV_OK)
+                    ? ESP_OK : ESP_FAIL;
+    if (err == ESP_OK) s_output_volume = volume;
+    return err;
+}
+
+int pipeline_ws_get_volume(void)
+{
+    return s_output_volume;
+}
+
+esp_err_t pipeline_ws_save_volume(int volume)
+{
+    ESP_RETURN_ON_ERROR(pipeline_ws_set_volume(volume), TAG, "set volume failed");
+    nvs_handle_t h;
+    ESP_RETURN_ON_ERROR(nvs_open(AUDIO_NVS_NAMESPACE, NVS_READWRITE, &h), TAG, "open volume NVS failed");
+    esp_err_t err = nvs_set_u8(h, AUDIO_NVS_VOLUME, (uint8_t)s_output_volume);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    if (err == ESP_OK) ESP_LOGI(TAG, "volume saved: %d", s_output_volume);
+    return err;
 }

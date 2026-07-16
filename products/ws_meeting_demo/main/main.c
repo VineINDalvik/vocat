@@ -86,6 +86,7 @@ void app_main(void)
 
     // ---- Audio hardware ----
     ESP_ERROR_CHECK(pipeline_ws_hw_init());
+    ui_meeting_refresh_volume();
 
     // ---- WiFi ----
     ret = wifi_init_sta();

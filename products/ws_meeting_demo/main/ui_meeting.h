@@ -41,6 +41,7 @@ void ui_meeting_set_current_wifi(const char *ssid);
  *         Safe to call from any task (called via lv_async_call from wifi status cb).
  */
 void ui_meeting_set_wifi_result(const char *text);
+void ui_meeting_refresh_volume(void);
 
 /**
  * @brief  Create all LVGL widgets. Call once after bsp_display_start().
@@ -61,6 +62,7 @@ void ui_meeting_set_state(ui_state_t state);
  * @param text  e.g. "● Connected", "● Connecting...", "● Connection Error"
  */
 void ui_meeting_set_status(const char *text);
+void ui_meeting_show_start_error(const char *text);
 
 /**
  * @brief  Show action/result text below the status label (for function calling).

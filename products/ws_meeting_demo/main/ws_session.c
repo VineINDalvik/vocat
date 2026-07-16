@@ -34,7 +34,8 @@ typedef enum {
 typedef struct { cmd_type_t type; } session_cmd_t;
 
 static QueueHandle_t      s_cmd_queue = NULL;
-static ws_session_state_t s_state     = WS_SESSION_IDLE;
+static volatile ws_session_state_t s_state = WS_SESSION_IDLE;
+static volatile bool      s_start_pending = false;
 static char               s_session_id[64] = {0};
 static uint32_t           s_answer_chunk_count = 0;
 static bool               s_first_answer_text_logged = false;
@@ -238,42 +239,68 @@ static bool wait_for_ip(uint32_t timeout_ms)
 // ---------------------------------------------------------------------------
 static void do_start_meeting(void)
 {
-    set_state(WS_SESSION_CONNECTING);
-    if (bsp_display_lock(100)) {
-        ui_meeting_set_state(UI_STATE_MEETING);
-        bsp_display_unlock();
+    s_start_pending = false;
+    if (s_state != WS_SESSION_IDLE) {
+        ESP_LOGW(TAG, "start_meeting ignored in state=%d", (int)s_state);
+        return;
     }
+    set_state(WS_SESSION_CONNECTING);
+
+    if (!pipeline_ws_hw_is_ready()) {
+        ESP_LOGE(TAG, "[FAIL] start_meeting: audio hardware not ready");
+        set_state(WS_SESSION_IDLE);
+        ws_session_update_ui_status("Hardware Not Ready");
+        return;
+    }
+    ESP_LOGI(TAG, "[OK] audio hardware ready");
+    ws_session_update_ui_status("Checking WiFi...");
 
     if (!wait_for_ip(30000)) {
         ESP_LOGE(TAG, "[FAIL] start_meeting: no network");
         set_state(WS_SESSION_IDLE);
-        if (bsp_display_lock(100)) {
-            ui_meeting_set_state(UI_STATE_IDLE);
-            bsp_display_unlock();
-        }
+        ws_session_update_ui_status("WiFi Not Connected");
         return;
     }
 
+    ws_session_update_ui_status("Connecting meeting server...");
+    if (api_client_check_reachable() != ESP_OK) {
+        ESP_LOGE(TAG, "[FAIL] start_meeting: backend unreachable");
+        set_state(WS_SESSION_IDLE);
+        ws_session_update_ui_status("Meeting Server Unreachable");
+        return;
+    }
+
+    ws_session_update_ui_status("Creating meeting session...");
     if (api_client_create_session(NULL, s_session_id, sizeof(s_session_id)) != ESP_OK) {
         ESP_LOGE(TAG, "[FAIL] start_meeting: session create failed");
         set_state(WS_SESSION_IDLE);
-        if (bsp_display_lock(100)) {
-            ui_meeting_set_state(UI_STATE_IDLE);
-            bsp_display_unlock();
-        }
+        ws_session_update_ui_status("Meeting Service Error");
         return;
     }
 
-    mp3_player_open();
+    ws_session_update_ui_status("Starting audio...");
+    if (mp3_player_open() != ESP_OK) {
+        ESP_LOGE(TAG, "[FAIL] start_meeting: audio player open failed");
+        api_client_end_session(s_session_id);
+        memset(s_session_id, 0, sizeof(s_session_id));
+        set_state(WS_SESSION_IDLE);
+        ws_session_update_ui_status("Audio Start Failed");
+        return;
+    }
 
+    ws_session_update_ui_status("Connecting live transcription...");
     if (transcribe_ws_connect(s_session_id) != ESP_OK) {
         ESP_LOGE(TAG, "[FAIL] start_meeting: transcribe WS connect failed");
-        set_state(WS_SESSION_ERROR);
-        ws_session_update_ui_status("Connection Error");
+        mp3_player_close();
+        api_client_end_session(s_session_id);
+        memset(s_session_id, 0, sizeof(s_session_id));
+        set_state(WS_SESSION_IDLE);
+        ws_session_update_ui_status("Meeting Connection Failed");
         return;
     }
 
     set_state(WS_SESSION_MEETING);
+    ui_meeting_set_state(UI_STATE_MEETING);
     ws_session_update_ui_status("[Meeting]");
 }
 
@@ -285,17 +312,14 @@ static void do_stop_meeting(void)
     mp3_player_close();
     memset(s_session_id, 0, sizeof(s_session_id));
     set_state(WS_SESSION_IDLE);
-    if (bsp_display_lock(100)) {
-        ui_meeting_set_state(UI_STATE_IDLE);
-        bsp_display_unlock();
-    }
+    ui_meeting_set_state(UI_STATE_IDLE);
 }
 
-static void enqueue_cmd(cmd_type_t type)
+static bool enqueue_cmd(cmd_type_t type)
 {
-    if (!s_cmd_queue) return;
+    if (!s_cmd_queue) return false;
     session_cmd_t cmd = {.type = type};
-    xQueueSend(s_cmd_queue, &cmd, 0);
+    return xQueueSend(s_cmd_queue, &cmd, 0) == pdTRUE;
 }
 
 static void on_host_session_rejected(void *ctx)
@@ -323,10 +347,7 @@ static void do_enter_host(void)
     }
 
     set_state(WS_SESSION_HOST);
-    if (bsp_display_lock(100)) {
-        ui_meeting_set_state(UI_STATE_HOST);
-        bsp_display_unlock();
-    }
+    ui_meeting_set_state(UI_STATE_HOST);
     ws_session_update_ui_status("Listening...");
 }
 
@@ -355,10 +376,7 @@ static void do_exit_host(void)
     mp3_player_open();
 
     set_state(WS_SESSION_MEETING);
-    if (bsp_display_lock(100)) {
-        ui_meeting_set_state(UI_STATE_MEETING);
-        bsp_display_unlock();
-    }
+    ui_meeting_set_state(UI_STATE_MEETING);
 
     if (transcribe_ws_connect(s_session_id) != ESP_OK) {
         ESP_LOGE(TAG, "[FAIL] exit_host: transcribe WS reconnect failed");
@@ -434,7 +452,19 @@ static void __attribute__((constructor)) ws_session_init(void)
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-esp_err_t ws_session_start_meeting(void)  { enqueue_cmd(CMD_START);      return ESP_OK; }
+esp_err_t ws_session_start_meeting(void)
+{
+    if (s_start_pending || s_state != WS_SESSION_IDLE) {
+        ESP_LOGW(TAG, "duplicate Start ignored");
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_start_pending = true;
+    if (!enqueue_cmd(CMD_START)) {
+        s_start_pending = false;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
 esp_err_t ws_session_stop_meeting(void)   { enqueue_cmd(CMD_STOP);       return ESP_OK; }
 esp_err_t ws_session_enter_host(void)     { enqueue_cmd(CMD_ENTER_HOST); return ESP_OK; }
 esp_err_t ws_session_exit_host(void)      { enqueue_cmd(CMD_EXIT_HOST);  return ESP_OK; }

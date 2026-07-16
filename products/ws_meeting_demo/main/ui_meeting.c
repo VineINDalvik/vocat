@@ -4,6 +4,7 @@
 #include "ui_meeting.h"
 #include "wifi_init.h"
 #include "ws_session.h"
+#include "pipeline_ws.h"
 #include "bsp/esp_vocat.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -17,14 +18,14 @@ static const char *TAG = "ui_meeting";
 
 #define SCREEN_W    360
 #define SCREEN_H    360
-#define TITLE_Y     55
-#define BTN_Y       155
+#define TITLE_Y     42
+#define BTN_Y       142
 #define BTN_H       54
 #define BTN_W_WIDE  200
 #define BTN_W_HALF  130
 #define BTN_GAP     10
-#define STATUS_Y    270
-#define ACTION_Y    295
+#define STATUS_Y    265
+#define ACTION_Y    292
 #define MIC_DOT_SIZE  12
 
 // ---------------------------------------------------------------------------
@@ -39,7 +40,13 @@ static lv_obj_t *s_btn_stop     = NULL;
 static lv_obj_t *s_btn_exit     = NULL;
 static lv_obj_t *s_btn_interrupt = NULL;
 static lv_obj_t *s_btn_wifi    = NULL;
+static lv_obj_t *s_btn_volume  = NULL;
 static lv_obj_t *s_mic_dot      = NULL;
+static lv_obj_t *s_brand_label  = NULL;
+static lv_obj_t *s_orb_glow     = NULL;
+static lv_obj_t *s_volume_panel = NULL;
+static lv_obj_t *s_volume_slider = NULL;
+static lv_obj_t *s_volume_value = NULL;
 
 // WiFi settings
 static lv_obj_t *s_wifi_ap_list = NULL;     // lv_list for scan results
@@ -68,6 +75,11 @@ static void btn_stop_cb(lv_event_t *e);
 static void btn_exit_cb(lv_event_t *e);
 static void btn_interrupt_cb(lv_event_t *e);
 static void btn_wifi_cb(lv_event_t *e);
+static void btn_volume_cb(lv_event_t *e);
+static void volume_minus_cb(lv_event_t *e);
+static void volume_plus_cb(lv_event_t *e);
+static void volume_slider_cb(lv_event_t *e);
+static void volume_close_cb(lv_event_t *e);
 static void wifi_save_cb_internal(lv_event_t *e);
 static void wifi_back_cb_internal(lv_event_t *e);
 static void wifi_ta_focus_cb(lv_event_t *e);
@@ -75,6 +87,7 @@ static void wifi_ap_selected_cb(lv_event_t *e);
 static void wifi_show_pass_cb(lv_event_t *e);
 static void wifi_do_scan(void);
 static void show_wifi_scan_results(void *arg);
+static void update_volume_widgets(int volume);
 
 void ui_meeting_register_wifi_save_cb(wifi_save_cb_t cb)
 {
@@ -96,12 +109,27 @@ static lv_obj_t *make_button(lv_obj_t *parent, const char *label_text,
     lv_obj_t *btn = lv_btn_create(parent);
     lv_obj_set_size(btn, w, h);
     lv_obj_set_pos(btn, x, y);
-    lv_obj_set_style_radius(btn, 10, 0);
+    lv_obj_set_style_radius(btn, 22, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x7257D8), 0);
+    lv_obj_set_style_bg_grad_color(btn, lv_color_hex(0x4F6EF7), 0);
+    lv_obj_set_style_bg_grad_dir(btn, LV_GRAD_DIR_HOR, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(0xAFA1F0), 0);
+    lv_obj_set_style_shadow_width(btn, 18, 0);
+    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x5B45B8), 0);
+    lv_obj_set_style_shadow_opa(btn, LV_OPA_40, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x8B72E8), LV_STATE_PRESSED);
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, label_text);
     lv_obj_center(lbl);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
     return btn;
+}
+
+static void orb_pulse_cb(void *obj, int32_t value)
+{
+    lv_obj_set_style_bg_opa((lv_obj_t *)obj, (lv_opa_t)value, 0);
+    lv_obj_set_style_border_opa((lv_obj_t *)obj, (lv_opa_t)value, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -302,22 +330,48 @@ static void wifi_ap_selected_cb(lv_event_t *e)
 void ui_meeting_create(void)
 {
     lv_obj_t *screen = lv_scr_act();
-    lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x100D22), 0);
+    lv_obj_set_style_bg_grad_color(screen, lv_color_hex(0x21183D), 0);
+    lv_obj_set_style_bg_grad_dir(screen, LV_GRAD_DIR_VER, 0);
+
+    // Ambient color fields echo Clare's violet / mint visual language while
+    // preserving contrast on the small circular display.
+    lv_obj_t *mint_glow = lv_obj_create(screen);
+    lv_obj_remove_style_all(mint_glow);
+    lv_obj_set_size(mint_glow, 125, 125);
+    lv_obj_align(mint_glow, LV_ALIGN_TOP_RIGHT, 35, -35);
+    lv_obj_set_style_radius(mint_glow, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(mint_glow, lv_color_hex(0x56D7B0), 0);
+    lv_obj_set_style_bg_opa(mint_glow, LV_OPA_10, 0);
+
+    lv_obj_t *violet_glow = lv_obj_create(screen);
+    lv_obj_remove_style_all(violet_glow);
+    lv_obj_set_size(violet_glow, 155, 155);
+    lv_obj_align(violet_glow, LV_ALIGN_BOTTOM_LEFT, -55, 45);
+    lv_obj_set_style_radius(violet_glow, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(violet_glow, lv_color_hex(0x8D6DF2), 0);
+    lv_obj_set_style_bg_opa(violet_glow, LV_OPA_10, 0);
+
+    s_brand_label = lv_label_create(screen);
+    lv_obj_set_style_text_font(s_brand_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_brand_label, lv_color_hex(0xB8F1DE), 0);
+    lv_label_set_text(s_brand_label, "CLARE  •  READY");
+    lv_obj_align(s_brand_label, LV_ALIGN_TOP_MID, 0, 19);
 
     // ---- Title ----
     s_title_label = lv_label_create(screen);
     lv_obj_set_style_text_font(s_title_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_title_label, lv_color_white(), 0);
+    lv_obj_set_style_text_color(s_title_label, lv_color_hex(0xFFFDFB), 0);
     lv_obj_set_width(s_title_label, SCREEN_W - 40);
     lv_label_set_long_mode(s_title_label, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(s_title_label, "Meeting Assistant");
+    lv_label_set_text(s_title_label, "Your meeting, in focus");
     lv_obj_set_style_text_align(s_title_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_title_label, LV_ALIGN_TOP_MID, 0, TITLE_Y);
 
     // ---- Status label ----
     s_status_label = lv_label_create(screen);
-    lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_status_label, lv_color_make(0x80, 0x80, 0x80), 0);
+    lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_status_label, lv_color_hex(0xCFC6DD), 0);
     lv_obj_set_width(s_status_label, SCREEN_W - 40);
     lv_label_set_long_mode(s_status_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_status_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -336,33 +390,64 @@ void ui_meeting_create(void)
     lv_obj_align(s_action_label, LV_ALIGN_TOP_MID, 0, ACTION_Y);
     lv_obj_add_flag(s_action_label, LV_OBJ_FLAG_HIDDEN);
 
-    // ---- Mic dot ----
+    // ---- Listening indicator ----
     s_mic_dot = lv_obj_create(screen);
     lv_obj_set_size(s_mic_dot, MIC_DOT_SIZE, MIC_DOT_SIZE);
     lv_obj_set_style_radius(s_mic_dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_mic_dot, lv_color_make(0x00, 0xCC, 0x44), 0);
+    lv_obj_set_style_bg_color(s_mic_dot, lv_color_hex(0x75E3BF), 0);
     lv_obj_set_style_border_width(s_mic_dot, 0, 0);
     lv_obj_align(s_mic_dot, LV_ALIGN_TOP_MID, 0, TITLE_Y - MIC_DOT_SIZE - 8);
     lv_obj_add_flag(s_mic_dot, LV_OBJ_FLAG_HIDDEN);
 
-    // ---- IDLE: [Start Meeting] + [WiFi] ----
-    s_btn_start = make_button(screen, "Start Meeting",
-                              (SCREEN_W - BTN_W_WIDE) / 2, BTN_Y,
-                              BTN_W_WIDE, BTN_H, btn_start_cb);
+    // ---- Animated Clare orb / primary action ----
+    s_orb_glow = lv_obj_create(screen);
+    lv_obj_remove_style_all(s_orb_glow);
+    lv_obj_set_size(s_orb_glow, 164, 164);
+    lv_obj_align(s_orb_glow, LV_ALIGN_TOP_MID, 0, 88);
+    lv_obj_set_style_radius(s_orb_glow, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_orb_glow, lv_color_hex(0x8268E8), 0);
+    lv_obj_set_style_bg_opa(s_orb_glow, LV_OPA_20, 0);
+    lv_obj_set_style_border_width(s_orb_glow, 2, 0);
+    lv_obj_set_style_border_color(s_orb_glow, lv_color_hex(0xA9EAD3), 0);
+    lv_obj_set_style_border_opa(s_orb_glow, LV_OPA_30, 0);
 
-    s_btn_wifi = make_button(screen, "WiFi",
-                              (SCREEN_W - 120) / 2, BTN_Y + BTN_H + 10,
-                              120, 42, btn_wifi_cb);
+    lv_anim_t pulse;
+    lv_anim_init(&pulse);
+    lv_anim_set_var(&pulse, s_orb_glow);
+    lv_anim_set_values(&pulse, LV_OPA_20, LV_OPA_50);
+    lv_anim_set_time(&pulse, 1400);
+    lv_anim_set_playback_time(&pulse, 1400);
+    lv_anim_set_repeat_count(&pulse, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_exec_cb(&pulse, orb_pulse_cb);
+    lv_anim_start(&pulse);
+
+    s_btn_start = make_button(screen, "Start Meeting",
+                              (SCREEN_W - 142) / 2, 99,
+                              142, 142, btn_start_cb);
+    lv_obj_set_style_radius(s_btn_start, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_btn_start, lv_color_hex(0x7558D6), 0);
+    lv_obj_set_style_bg_grad_color(s_btn_start, lv_color_hex(0x4F6EF7), 0);
+    lv_obj_set_style_bg_grad_dir(s_btn_start, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(s_btn_start, 0), &lv_font_montserrat_20, 0);
+
+    s_btn_wifi = make_button(screen, LV_SYMBOL_WIFI "  Wi-Fi",
+                              62, 304, 110, 42, btn_wifi_cb);
+    s_btn_volume = make_button(screen, LV_SYMBOL_VOLUME_MAX "  75%",
+                              188, 304, 110, 42, btn_volume_cb);
+    lv_obj_set_style_bg_color(s_btn_wifi, lv_color_hex(0x2B2447), 0);
+    lv_obj_set_style_bg_grad_color(s_btn_wifi, lv_color_hex(0x2B2447), 0);
+    lv_obj_set_style_bg_color(s_btn_volume, lv_color_hex(0x2B2447), 0);
+    lv_obj_set_style_bg_grad_color(s_btn_volume, lv_color_hex(0x2B2447), 0);
 
     // ---- MEETING: [Host Mode] [Stop Meeting] ----
     int two_btn_total = BTN_W_HALF * 2 + BTN_GAP;
     int two_btn_x = (SCREEN_W - two_btn_total) / 2;
 
     s_btn_host = make_button(screen, "Host Mode",
-                             two_btn_x, BTN_Y, BTN_W_HALF, BTN_H, btn_host_cb);
+                             two_btn_x, 185, BTN_W_HALF, BTN_H, btn_host_cb);
 
     s_btn_stop = make_button(screen, "Stop Meeting",
-                             two_btn_x + BTN_W_HALF + BTN_GAP, BTN_Y,
+                             two_btn_x + BTN_W_HALF + BTN_GAP, 185,
                              BTN_W_HALF, BTN_H, btn_stop_cb);
 
     // ---- HOST: [Interrupt] (top) [Exit Host Mode] (bottom) ---- stacked vertically for round screen
@@ -373,6 +458,50 @@ void ui_meeting_create(void)
     s_btn_exit = make_button(screen, "Exit Host Mode",
                              (SCREEN_W - BTN_W_WIDE) / 2, BTN_Y + BTN_H + BTN_GAP,
                              BTN_W_WIDE, BTN_H, btn_exit_cb);
+
+    // ---- Volume sheet ----
+    s_volume_panel = lv_obj_create(screen);
+    lv_obj_set_size(s_volume_panel, 286, 172);
+    lv_obj_align(s_volume_panel, LV_ALIGN_CENTER, 0, 12);
+    lv_obj_set_style_radius(s_volume_panel, 28, 0);
+    lv_obj_set_style_bg_color(s_volume_panel, lv_color_hex(0x211B39), 0);
+    lv_obj_set_style_bg_opa(s_volume_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_volume_panel, 1, 0);
+    lv_obj_set_style_border_color(s_volume_panel, lv_color_hex(0x8F7BDC), 0);
+    lv_obj_set_style_shadow_width(s_volume_panel, 28, 0);
+    lv_obj_set_style_shadow_color(s_volume_panel, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(s_volume_panel, LV_OPA_60, 0);
+
+    lv_obj_t *volume_title = lv_label_create(s_volume_panel);
+    lv_label_set_text(volume_title, "Speaker volume");
+    lv_obj_set_style_text_font(volume_title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(volume_title, lv_color_white(), 0);
+    lv_obj_align(volume_title, LV_ALIGN_TOP_LEFT, 5, 3);
+
+    s_volume_value = lv_label_create(s_volume_panel);
+    lv_obj_set_style_text_color(s_volume_value, lv_color_hex(0xB8F1DE), 0);
+    lv_obj_set_style_text_font(s_volume_value, &lv_font_montserrat_20, 0);
+    lv_obj_align(s_volume_value, LV_ALIGN_TOP_RIGHT, -5, 3);
+
+    lv_obj_t *minus = make_button(s_volume_panel, LV_SYMBOL_MINUS, 5, 66, 46, 46, volume_minus_cb);
+    lv_obj_t *plus = make_button(s_volume_panel, LV_SYMBOL_PLUS, 205, 66, 46, 46, volume_plus_cb);
+    lv_obj_set_style_shadow_width(minus, 0, 0);
+    lv_obj_set_style_shadow_width(plus, 0, 0);
+
+    s_volume_slider = lv_slider_create(s_volume_panel);
+    lv_obj_set_size(s_volume_slider, 138, 12);
+    lv_obj_align(s_volume_slider, LV_ALIGN_TOP_MID, 0, 83);
+    lv_slider_set_range(s_volume_slider, 0, 100);
+    lv_obj_set_style_bg_color(s_volume_slider, lv_color_hex(0x504762), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_volume_slider, lv_color_hex(0x8D72E8), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s_volume_slider, lv_color_hex(0xB8F1DE), LV_PART_KNOB);
+    lv_obj_set_style_pad_all(s_volume_slider, 6, LV_PART_KNOB);
+    lv_obj_add_event_cb(s_volume_slider, volume_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_volume_slider, volume_slider_cb, LV_EVENT_RELEASED, NULL);
+
+    lv_obj_t *done = make_button(s_volume_panel, "Done", 78, 124, 100, 36, volume_close_cb);
+    lv_obj_set_style_shadow_width(done, 0, 0);
+    lv_obj_add_flag(s_volume_panel, LV_OBJ_FLAG_HIDDEN);
 
     // ---- WiFi settings: AP list ----
     s_wifi_ap_list = lv_list_create(screen);
@@ -467,6 +596,9 @@ static void apply_state(ui_state_t state)
     lv_obj_add_flag(s_btn_exit,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_btn_interrupt, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_btn_wifi,   LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_btn_volume, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_orb_glow, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_volume_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_action_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_mic_dot,   LV_OBJ_FLAG_HIDDEN);
@@ -474,29 +606,38 @@ static void apply_state(ui_state_t state)
 
     switch (state) {
     case UI_STATE_IDLE:
-        lv_label_set_text(s_title_label, "Meeting Assistant");
+        lv_label_set_text(s_brand_label, "CLARE  •  READY");
+        lv_label_set_text(s_title_label, "Your meeting, in focus");
         lv_obj_clear_flag(s_btn_start, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_btn_wifi,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_btn_volume, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_orb_glow, LV_OBJ_FLAG_HIDDEN);
         if (s_action_clear_timer) esp_timer_stop(s_action_clear_timer);
         break;
 
     case UI_STATE_MEETING:
-        lv_label_set_text(s_title_label, "Meeting in Progress");
+        lv_label_set_text(s_brand_label, "CLARE  •  LIVE");
+        lv_label_set_text(s_title_label, "Listening with you");
         lv_obj_clear_flag(s_btn_host,   LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_btn_stop,   LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_btn_volume, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_orb_glow, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_mic_dot, LV_OBJ_FLAG_HIDDEN);
         break;
 
     case UI_STATE_HOST:
-        lv_label_set_text(s_title_label, "Host Mode");
+        lv_label_set_text(s_brand_label, "CLARE  •  HOST");
+        lv_label_set_text(s_title_label, "Host controls");
         lv_obj_clear_flag(s_btn_interrupt, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_btn_exit,   LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_btn_volume, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
         break;
 
     case UI_STATE_WIFI_SETTINGS:
-        lv_label_set_text(s_title_label, "WiFi Settings");
+        lv_label_set_text(s_brand_label, "CLARE  •  CONNECT");
+        lv_label_set_text(s_title_label, "Choose Wi-Fi");
         // Show scan list, trigger scan
         lv_obj_clear_flag(s_wifi_ap_list, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_wifi_btn_back, LV_OBJ_FLAG_HIDDEN);
@@ -530,6 +671,17 @@ void ui_meeting_set_status(const char *text)
     }
 }
 
+void ui_meeting_show_start_error(const char *text)
+{
+    if (!text) return;
+    if (bsp_display_lock(100)) {
+        apply_state(UI_STATE_IDLE);
+        lv_label_set_text(s_status_label, text);
+        lv_obj_clear_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
+        bsp_display_unlock();
+    }
+}
+
 void ui_meeting_set_action_text(const char *text)
 {
     if (!text) return;
@@ -551,8 +703,7 @@ void ui_meeting_set_action_text(const char *text)
 // ---------------------------------------------------------------------------
 static void btn_start_cb(lv_event_t *e)
 {
-    apply_state(UI_STATE_MEETING);
-    lv_label_set_text(s_status_label, "Connecting...");
+    lv_label_set_text(s_status_label, "Checking hardware and network...");
     lv_obj_clear_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
     ws_session_start_meeting();
 }
@@ -587,6 +738,56 @@ static void btn_interrupt_cb(lv_event_t *e)
 static void btn_wifi_cb(lv_event_t *e)
 {
     apply_state(UI_STATE_WIFI_SETTINGS);
+}
+
+static void update_volume_widgets(int volume)
+{
+    char value[12];
+    snprintf(value, sizeof(value), "%d%%", volume);
+    if (s_volume_value) lv_label_set_text(s_volume_value, value);
+    if (s_volume_slider) lv_slider_set_value(s_volume_slider, volume, LV_ANIM_ON);
+    if (s_btn_volume) {
+        char button[24];
+        snprintf(button, sizeof(button), LV_SYMBOL_VOLUME_MAX "  %d%%", volume);
+        lv_label_set_text(lv_obj_get_child(s_btn_volume, 0), button);
+    }
+}
+
+static void btn_volume_cb(lv_event_t *e)
+{
+    update_volume_widgets(pipeline_ws_get_volume());
+    lv_obj_clear_flag(s_volume_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_volume_panel);
+}
+
+static void volume_set_from_ui(int volume, bool save)
+{
+    if (volume < 0) volume = 0;
+    if (volume > 100) volume = 100;
+    esp_err_t err = save ? pipeline_ws_save_volume(volume) : pipeline_ws_set_volume(volume);
+    if (err == ESP_OK) update_volume_widgets(volume);
+}
+
+static void volume_minus_cb(lv_event_t *e)
+{
+    volume_set_from_ui(pipeline_ws_get_volume() - 10, true);
+}
+
+static void volume_plus_cb(lv_event_t *e)
+{
+    volume_set_from_ui(pipeline_ws_get_volume() + 10, true);
+}
+
+static void volume_slider_cb(lv_event_t *e)
+{
+    int volume = lv_slider_get_value(s_volume_slider);
+    volume_set_from_ui(volume, lv_event_get_code(e) == LV_EVENT_RELEASED);
+}
+
+static void volume_close_cb(lv_event_t *e)
+{
+    pipeline_ws_save_volume(pipeline_ws_get_volume());
+    lv_obj_add_flag(s_volume_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void wifi_ta_focus_cb(lv_event_t *e)
@@ -673,5 +874,13 @@ void ui_meeting_set_wifi_result(const char *text)
             lv_label_set_text(s_wifi_status, text);
             bsp_display_unlock();
         }
+    }
+}
+
+void ui_meeting_refresh_volume(void)
+{
+    if (bsp_display_lock(100)) {
+        update_volume_widgets(pipeline_ws_get_volume());
+        bsp_display_unlock();
     }
 }
