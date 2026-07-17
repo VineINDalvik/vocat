@@ -49,6 +49,11 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "ws_meeting_demo starting");
 
+    // ESP-VoCat's single power key only starts the board momentarily.  Take
+    // over the power-hold GPIO immediately so the device stays on after the
+    // user releases the key, matching the production Speaker startup path.
+    ESP_ERROR_CHECK(bsp_power_init(true));
+
     // ---- NVS ----
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
