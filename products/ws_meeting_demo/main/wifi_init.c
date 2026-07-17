@@ -140,9 +140,10 @@ esp_err_t wifi_init_sta(void)
     // Vine's iPhone is the product's preferred boot network.  An older saved
     // lab SSID must not prevent the device from using the configured hotspot.
     if (wifi_load_credentials(ssid, sizeof(ssid), password, sizeof(password)) == ESP_OK) {
-        if (strcmp(ssid, PREFERRED_WIFI_SSID) != 0) {
-            ESP_LOGW(TAG, "saved WiFi \"%s\" is not preferred; restoring \"%s\"",
-                     ssid, CONFIG_MEETING_WIFI_SSID);
+        if (strcmp(ssid, PREFERRED_WIFI_SSID) != 0 ||
+            strcmp(password, CONFIG_MEETING_WIFI_PASSWORD) != 0) {
+            ESP_LOGW(TAG, "restoring configured credentials for preferred WiFi \"%s\"",
+                     CONFIG_MEETING_WIFI_SSID);
             strlcpy(ssid, CONFIG_MEETING_WIFI_SSID, sizeof(ssid));
             strlcpy(password, CONFIG_MEETING_WIFI_PASSWORD, sizeof(password));
             ESP_ERROR_CHECK(wifi_save_credentials(ssid, password));
