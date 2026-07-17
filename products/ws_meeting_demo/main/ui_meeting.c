@@ -307,8 +307,11 @@ static void wifi_ap_selected_cb(lv_event_t *e)
     lv_obj_clear_flag(s_wifi_ssid_label, LV_OBJ_FLAG_HIDDEN);
 
     // Pre-fill saved password if this SSID was previously saved
+    char saved_ssid[33] = {0};
     char saved_pass[65] = {0};
-    if (wifi_load_credentials(s_selected_ssid, sizeof(s_selected_ssid), saved_pass, sizeof(saved_pass)) == ESP_OK) {
+    if (wifi_load_credentials(saved_ssid, sizeof(saved_ssid),
+                              saved_pass, sizeof(saved_pass)) == ESP_OK &&
+        strcmp(saved_ssid, s_selected_ssid) == 0) {
         lv_textarea_set_text(s_wifi_ta_pass, saved_pass);
         ESP_LOGI(TAG, "pre-filled saved password for \"%s\"", s_selected_ssid);
     } else {

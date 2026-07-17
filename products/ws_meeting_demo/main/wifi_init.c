@@ -137,11 +137,17 @@ esp_err_t wifi_init_sta(void)
     char ssid[33] = {0};
     char password[65] = {0};
 
-    // NVS is the source of truth after the user chooses a network. The shipped
-    // default is Vine's iPhone, so it reconnects automatically on every boot.
+    // Vine's iPhone is the product's preferred boot network.  An older saved
+    // lab SSID must not prevent the device from using the configured hotspot.
     if (wifi_load_credentials(ssid, sizeof(ssid), password, sizeof(password)) == ESP_OK) {
-        ESP_LOGI(TAG, "auto-connecting saved WiFi: \"%s\"%s", ssid,
-                 strcmp(ssid, PREFERRED_WIFI_SSID) == 0 ? " (preferred)" : "");
+        if (strcmp(ssid, PREFERRED_WIFI_SSID) != 0) {
+            ESP_LOGW(TAG, "saved WiFi \"%s\" is not preferred; restoring \"%s\"",
+                     ssid, CONFIG_MEETING_WIFI_SSID);
+            strlcpy(ssid, CONFIG_MEETING_WIFI_SSID, sizeof(ssid));
+            strlcpy(password, CONFIG_MEETING_WIFI_PASSWORD, sizeof(password));
+            ESP_ERROR_CHECK(wifi_save_credentials(ssid, password));
+        }
+        ESP_LOGI(TAG, "auto-connecting saved WiFi: \"%s\" (preferred)", ssid);
     } else {
         // Fall back to Kconfig defaults
         ESP_LOGI(TAG, "no saved WiFi, trying Kconfig default \"%s\"", CONFIG_MEETING_WIFI_SSID);
